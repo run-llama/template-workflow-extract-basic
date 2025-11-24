@@ -8,13 +8,14 @@ To run the application, install [`uv`](https://docs.astral.sh/uv/) and run `uvx 
 
 For some basic customizations, you can modify `src/extraction_review/config.py`
 
-- **`USE_REMOTE_EXTRACTION_SCHEMA`**: Set to `False` to define your own Pydantic `ExtractionSchema` in this file. Set to `True` to reuse the schema from an existing LlamaCloud Extraction Agent.
 - **`EXTRACTION_AGENT_NAME`**: Logical name for your Extraction Agent. When `USE_REMOTE_EXTRACTION_SCHEMA` is `False`, this name is used to upsert the agent with your local schema; when `True`, it is used to fetch an existing agent.
 - **`EXTRACTED_DATA_COLLECTION`**: The Agent Data collection name used to store extractions (namespaced by agent name and environment).
-- **`ExtractionSchema`**: When using a local schema, edit this Pydantic model to match the fields you want extracted. Prefer optional types where possible to allow for partial extractions.
+- **`ExtractionSchema`**: When using a local schema, edit this Pydantic model to match the fields you want extracted. Prefer optional types where possible to allow for partial extractions. Note that the extraction process requires all values! so you must explicitly set values to be optional if they are not required. (pydantic default factories will not work, as pydantic only uses default values for missing fields).
 
 The UI fetches the JSON Schema and collection name from the backend metadata workflow at runtime, and dynamically
-generates an editing UI based on the schema.
+generates an editing UI based on the schema. If you customize this application to have a different extraction schema from
+the presentation schema rendered in the UI, for example if you customize the extraction process to add additional fields or otherwise
+transforma it, then you must return the presentation schema from the metadata workflow.
 
 ## Complex customizations
 

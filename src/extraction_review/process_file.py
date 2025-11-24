@@ -4,18 +4,24 @@ import logging
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Literal
+from typing import Any, Literal, Annotated
 
 import httpx
 from llama_cloud import ExtractRun
-from llama_cloud_services.extract import SourceText
-from llama_cloud_services.beta.agent_data import ExtractedData, InvalidExtractionData
+from llama_cloud.client import AsyncLlamaCloud
+from llama_cloud_services.extract import SourceText, LlamaExtract
+from llama_cloud_services.beta.agent_data import (
+    ExtractedData,
+    InvalidExtractionData,
+    AsyncAgentDataClient,
+)
 from pydantic import BaseModel
+from workflows.resource import Resource
 from workflows import Context, Workflow, step
 from workflows.events import Event, StartEvent, StopEvent
 
-from .clients import get_llama_cloud_client, get_data_client, get_extract_agent
-from .schema import get_extraction_schema
+from .config import EXTRACT_CONFIG, ExtractionSchema
+from .clients import get_llama_cloud_client, get_data_client, get_llama_extract
 
 logger = logging.getLogger(__name__)
 
@@ -65,19 +71,20 @@ class ProcessFileWorkflow(Workflow):
 
     @step()
     async def download_file(
-        self, event: DownloadFileEvent, ctx: Context[ExtractionState]
+        self,
+        event: DownloadFileEvent,
+        ctx: Context[ExtractionState],
+        llama_cloud_client: Annotated[
+            AsyncLlamaCloud, Resource(get_llama_cloud_client)
+        ],
     ) -> FileDownloadedEvent:
         """Download the file reference from the cloud storage"""
         state = await ctx.store.get_state()
         if state.file_id is None:
             raise ValueError("File ID is not set")
         try:
-            file_metadata = await get_llama_cloud_client().files.get_file(
-                id=state.file_id
-            )
-            file_url = await get_llama_cloud_client().files.read_file_content(
-                state.file_id
-            )
+            file_metadata = await llama_cloud_client.files.get_file(id=state.file_id)
+            file_url = await llama_cloud_client.files.read_file_content(state.file_id)
 
             temp_dir = tempfile.gettempdir()
             filename = file_metadata.name
@@ -108,15 +115,16 @@ class ProcessFileWorkflow(Workflow):
 
     @step()
     async def process_file(
-        self, event: FileDownloadedEvent, ctx: Context[ExtractionState]
+        self,
+        event: FileDownloadedEvent,
+        ctx: Context[ExtractionState],
+        extractor: Annotated[LlamaExtract, Resource(get_llama_extract)],
     ) -> ExtractedEvent | ExtractedInvalidEvent:
         """Runs the extraction against the file"""
         state = await ctx.store.get_state()
         if state.file_path is None or state.filename is None:
             raise ValueError("File path or filename is not set")
         try:
-            agent = get_extract_agent()
-            schema = await get_extraction_schema()
             # track the content of the file, so as to be able to de-duplicate
             file_content = Path(state.file_path).read_bytes()
             file_hash = hashlib.sha256(file_content).hexdigest()
@@ -130,12 +138,17 @@ class ProcessFileWorkflow(Workflow):
                     level="info", message=f"Extracting data from file {state.filename}"
                 )
             )
-            extracted_result: ExtractRun = await agent.aextract(source_text)
+            extracted_result: ExtractRun = await extractor.aextract(
+                data_schema=ExtractionSchema, files=source_text, config=EXTRACT_CONFIG
+            )
             try:
                 logger.info(f"Extracted data: {extracted_result}")
                 data = ExtractedData.from_extraction_result(
                     result=extracted_result,
-                    schema=schema,
+                    schema=ExtractionSchema,
+                    # retain original file name and id, rather than using the extracted duplicate file
+                    file_name=state.filename,
+                    file_id=state.file_id,
                     file_hash=file_hash,
                 )
                 return ExtractedEvent(data=data)
@@ -157,7 +170,10 @@ class ProcessFileWorkflow(Workflow):
 
     @step()
     async def record_extracted_data(
-        self, event: ExtractedEvent | ExtractedInvalidEvent, ctx: Context
+        self,
+        event: ExtractedEvent | ExtractedInvalidEvent,
+        ctx: Context,
+        data_client: Annotated[AsyncAgentDataClient, Resource(get_data_client)],
     ) -> StopEvent:
         """Records the extracted data to the agent data API"""
         try:
@@ -170,7 +186,7 @@ class ProcessFileWorkflow(Workflow):
             )
             # remove past data when reprocessing the same file
             if event.data.file_hash:
-                await get_data_client().delete(
+                await data_client.delete(
                     filter={
                         "file_hash": {
                             "eq": event.data.file_hash,
@@ -181,7 +197,7 @@ class ProcessFileWorkflow(Workflow):
                     f"Removing past data for file {event.data.file_name} with hash {event.data.file_hash}"
                 )
             # finally, save the new data
-            item_id = await get_data_client().create_item(event.data)
+            item_id = await data_client.create_item(event.data)
             return StopEvent(
                 result=item_id.id,
             )
