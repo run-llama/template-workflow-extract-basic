@@ -34,7 +34,6 @@ class ExtractionSchema(BaseModel):
     )
 
 
-# This is only used if USE_REMOTE_EXTRACTION_SCHEMA is False.
 EXTRACT_CONFIG = ExtractConfig(
     extraction_mode=ExtractMode.PREMIUM,
     system_prompt=None,
