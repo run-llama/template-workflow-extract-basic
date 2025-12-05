@@ -5,6 +5,7 @@ import httpx
 from llama_cloud_services import LlamaExtract
 from llama_cloud_services.beta.agent_data import AsyncAgentDataClient, ExtractedData
 from llama_cloud.client import AsyncLlamaCloud
+from .testing_utils import FakeLlamaCloudServer
 import logging
 
 from extraction_review.config import (
@@ -24,6 +25,11 @@ api_key = os.getenv("LLAMA_CLOUD_API_KEY")
 base_url = os.getenv("LLAMA_CLOUD_BASE_URL")
 project_id = os.getenv("LLAMA_DEPLOY_PROJECT_ID")
 
+if os.getenv("FAKE_LLAMA_CLOUD"):
+    fake = FakeLlamaCloudServer().install()
+else:
+    fake = None
+
 
 def get_llama_extract() -> LlamaExtract:
     return LlamaExtract(api_key=api_key, base_url=base_url, project_id=project_id)
@@ -38,7 +44,7 @@ def get_data_client() -> AsyncAgentDataClient:
     )
 
 
-def get_llama_cloud_client():
+def get_llama_cloud_client() -> AsyncLlamaCloud:
     return AsyncLlamaCloud(
         base_url=base_url,
         token=api_key,

@@ -55,6 +55,7 @@ class FakeLlamaCloudServer:
 
     # Context management ----------------------------------------------
     def install(self) -> "FakeLlamaCloudServer":
+        self.router.route(url__regex=r"^http://localhost:.*").pass_through()
         if not self._registered:
             self._register_namespaces()
         if not self._installed:
@@ -119,7 +120,7 @@ class FakeLlamaCloudServer:
     def _compile_regex(self, base: str, path: str) -> re.Pattern[str]:
         escaped = re.escape(base.rstrip("/"))
         regex_path = re.sub(r"\{[^/]+\}", r"[^/]+", path)
-        pattern = f"^{escaped}{regex_path}$"
+        pattern = f"^{escaped}{regex_path}(\\?.*)?$"
         return re.compile(pattern)
 
     # Helpers ---------------------------------------------------------

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 import random
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, MutableMapping
@@ -190,3 +191,11 @@ def _generate_value(schema: Any, rng: random.Random, depth: int) -> Any:
             return _generate_value(option, rng, depth + 1)
 
     return generate_text_blob(rng.randint(0, 1_000_000), sentences=1)
+
+
+def is_valid_uuidv4(s: str) -> bool:
+    try:
+        uuid.UUID(s, version=4)
+    except ValueError:
+        return False
+    return True

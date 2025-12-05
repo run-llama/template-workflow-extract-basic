@@ -11,7 +11,13 @@ import respx
 from llama_cloud.types import File as CloudFile
 from llama_cloud.types import FileIdPresignedUrl, PresignedUrl
 
-from ._deterministic import fingerprint_file, hash_chunks, utcnow
+from ._deterministic import (
+    fingerprint_file,
+    hash_chunks,
+    utcnow,
+    is_valid_uuidv4,
+    generate_text_blob,
+)
 from .matchers import RequestContext, RequestMatcher
 
 if TYPE_CHECKING:
@@ -190,10 +196,25 @@ class FakeFilesNamespace:
 
     def _handle_get_metadata(self, request: httpx.Request) -> httpx.Response:
         file_id = request.url.path.split("/")[-1]
-        if file_id not in self._files:
+        if file_id not in self._files and not is_valid_uuidv4(file_id):
             return self._server.json_response(
                 {"detail": "File not found"}, status_code=404
             )
+        elif file_id not in self._files and is_valid_uuidv4(file_id):
+            # adaptations for files coming from UI
+            fl = self._build_file(
+                file_id=file_id,
+                name=f"file-{file_id}.pdf",
+                project_id=request.url.params.get(
+                    "project_id", self._server.default_project_id
+                ),
+                organization_id=request.url.params.get(
+                    "organization_id", self._server.default_organization_id
+                ),
+                content=bytes(generate_text_blob(0), encoding="utf-8"),
+                external_file_id=request.url.params.get("external_file_id"),
+            )
+            self._files[file_id] = fl
         return self._server.json_response(self._files[file_id].file.dict())
 
     def _handle_delete(self, request: httpx.Request) -> httpx.Response:
