@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-import uuid
 import random
+from jsonref import replace_refs
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, MutableMapping
 
@@ -36,6 +36,8 @@ def combined_seed(*parts: str) -> int:
 
 def generate_data_from_schema(schema: Any, seed: int) -> Any:
     rng = random.Random(seed)
+    schema = replace_refs(schema)
+    schema = {k: v for k, v in schema.items() if k != "$defs"}
     return _generate_value(schema, rng, depth=0)
 
 
@@ -191,11 +193,3 @@ def _generate_value(schema: Any, rng: random.Random, depth: int) -> Any:
             return _generate_value(option, rng, depth + 1)
 
     return generate_text_blob(rng.randint(0, 1_000_000), sentences=1)
-
-
-def is_valid_uuidv4(s: str) -> bool:
-    try:
-        uuid.UUID(s, version=4)
-    except ValueError:
-        return False
-    return True

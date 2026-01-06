@@ -26,7 +26,7 @@ base_url = os.getenv("LLAMA_CLOUD_BASE_URL")
 project_id = os.getenv("LLAMA_DEPLOY_PROJECT_ID")
 
 if os.getenv("FAKE_LLAMA_CLOUD"):
-    fake = FakeLlamaCloudServer().install()
+    fake: FakeLlamaCloudServer | None = FakeLlamaCloudServer().install()
 else:
     fake = None
 

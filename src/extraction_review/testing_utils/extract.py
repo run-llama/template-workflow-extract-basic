@@ -401,7 +401,7 @@ class FakeExtractNamespace:
             )
 
         file_id = payload["file_id"]
-        stored_file = self._files._files.get(file_id)
+        stored_file = self._files.get(file_id)
         if not stored_file:
             return self._server.json_response(
                 {"detail": "File not found"}, status_code=404
