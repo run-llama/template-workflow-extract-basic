@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict
 
@@ -114,7 +115,12 @@ class FakeParseNamespace:
             return self._server.json_response(
                 {"detail": "Result not found"}, status_code=404
             )
-        return self._server.json_response(job.result)
+        # Exclude job_id and file_name from result to avoid duplicate argument
+        # errors in JobResult.__init__ which passes these explicitly and spreads the dict
+        result = {
+            k: v for k, v in job.result.items() if k not in ("job_id", "file_name")
+        }
+        return self._server.json_response(result)
 
     def _split_multipart(
         self, request: httpx.Request
@@ -141,9 +147,15 @@ class FakeParseNamespace:
             payload = payload.rstrip(b"\r\n")
             header_text = header_blob.decode("utf-8", errors="ignore")
             if "filename=" in header_text:
-                filename = (
-                    header_text.split("filename=")[-1].strip().strip('"').strip("'")
-                )
+                # Extract filename from Content-Disposition header, handling quotes
+                # and avoiding capturing subsequent headers or parameters
+                match = re.search(r'filename="([^"]+)"', header_text)
+                if not match:
+                    match = re.search(r"filename='([^']+)'", header_text)
+                if not match:
+                    match = re.search(r"filename=([^\s;\r\n]+)", header_text)
+                if match:
+                    filename = match.group(1)
                 file_bytes = payload
             else:
                 name = header_text.split('name="')[-1].split('"')[0].strip()
