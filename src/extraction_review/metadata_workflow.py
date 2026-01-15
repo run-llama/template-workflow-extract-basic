@@ -21,12 +21,11 @@ async def get_extraction_schema_json() -> dict[str, Any]:
 
 
 class MetadataWorkflow(Workflow):
-    """
-    Simple single step workflow to expose configuration to the UI, such as the JSON schema and collection name.
-    """
+    """Provide extraction schema and configuration to the workflow editor."""
 
     @step
     async def get_metadata(self, _: StartEvent) -> MetadataResponse:
+        """Return the data schema and storage settings for the review interface."""
         json_schema = await get_extraction_schema_json()
         return MetadataResponse(
             json_schema=json_schema,

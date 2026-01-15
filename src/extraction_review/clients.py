@@ -32,10 +32,12 @@ else:
 
 
 def get_llama_extract() -> LlamaExtract:
+    """Document extractor for parsing and extracting structured fields."""
     return LlamaExtract(api_key=api_key, base_url=base_url, project_id=project_id)
 
 
 def get_data_client() -> AsyncAgentDataClient:
+    """Storage for extracted data, enabling human review and corrections."""
     return AsyncAgentDataClient(
         deployment_name=agent_name,
         collection=EXTRACTED_DATA_COLLECTION,
@@ -45,6 +47,7 @@ def get_data_client() -> AsyncAgentDataClient:
 
 
 def get_llama_cloud_client() -> AsyncLlamaCloud:
+    """Cloud services connection for file storage and processing."""
     return AsyncLlamaCloud(
         base_url=base_url,
         token=api_key,

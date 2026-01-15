@@ -58,12 +58,11 @@ class ExtractionState(BaseModel):
 
 
 class ProcessFileWorkflow(Workflow):
-    """
-    Given a file path, this workflow will process a single file through the custom extraction logic.
-    """
+    """Extract structured data from a document and save it for review."""
 
     @step()
     async def run_file(self, event: FileEvent, ctx: Context) -> DownloadFileEvent:
+        """Start extraction for the uploaded document."""
         logger.info(f"Running file {event.file_id}")
         async with ctx.store.edit_state() as state:
             state.file_id = event.file_id
@@ -78,7 +77,7 @@ class ProcessFileWorkflow(Workflow):
             AsyncLlamaCloud, Resource(get_llama_cloud_client)
         ],
     ) -> FileDownloadedEvent:
-        """Download the file reference from the cloud storage"""
+        """Retrieve the document from cloud storage for processing."""
         state = await ctx.store.get_state()
         if state.file_id is None:
             raise ValueError("File ID is not set")
@@ -120,7 +119,7 @@ class ProcessFileWorkflow(Workflow):
         ctx: Context[ExtractionState],
         extractor: Annotated[LlamaExtract, Resource(get_llama_extract)],
     ) -> ExtractedEvent | ExtractedInvalidEvent:
-        """Runs the extraction against the file"""
+        """Extract structured data fields from the document."""
         state = await ctx.store.get_state()
         if state.file_path is None or state.filename is None:
             raise ValueError("File path or filename is not set")
@@ -175,7 +174,7 @@ class ProcessFileWorkflow(Workflow):
         ctx: Context,
         data_client: Annotated[AsyncAgentDataClient, Resource(get_data_client)],
     ) -> StopEvent:
-        """Records the extracted data to the agent data API"""
+        """Save extracted data for human review and correction."""
         try:
             logger.info(f"Recorded extracted data for file {event.data.file_name}")
             ctx.write_event_to_stream(
