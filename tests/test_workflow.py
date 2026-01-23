@@ -13,18 +13,19 @@ Here are your editing permissions, which you **MUST ALWAYS** follow:
 </guidelines>
 """
 
-import pytest
 import warnings
 
+import pytest
 from extraction_review.clients import fake
 
 # <edit>
-from extraction_review.config import ExtractionSchema, EXTRACTED_DATA_COLLECTION
-from extraction_review.process_file import workflow as process_file_workflow
-from extraction_review.process_file import FileEvent
-from workflows.events import StartEvent
-from extraction_review.metadata_workflow import workflow as metadata_workflow
+from extraction_review.config import EXTRACTED_DATA_COLLECTION, ExtractionSchema
 from extraction_review.metadata_workflow import MetadataResponse
+from extraction_review.metadata_workflow import workflow as metadata_workflow
+from extraction_review.process_file import FileEvent
+from extraction_review.process_file import workflow as process_file_workflow
+from workflows.events import StartEvent
+
 # </edit>
 
 

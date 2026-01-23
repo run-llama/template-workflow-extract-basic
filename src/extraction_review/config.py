@@ -6,8 +6,7 @@ If you need more control, feel free to edit the rest of the application
 
 from __future__ import annotations
 
-from llama_cloud import ExtractConfig
-from llama_cloud_services.extract import ExtractMode
+from llama_cloud.types.extraction.extract_config_param import ExtractConfigParam
 from pydantic import BaseModel, Field
 
 # The name of the collection to use for storing extracted data. This will be qualified by the agent name.
@@ -34,8 +33,8 @@ class ExtractionSchema(BaseModel):
     )
 
 
-EXTRACT_CONFIG = ExtractConfig(
-    extraction_mode=ExtractMode.PREMIUM,
+EXTRACT_CONFIG = ExtractConfigParam(
+    extraction_mode="PREMIUM",
     system_prompt=None,
     # advanced. Only compatible with Premium mode.
     citation_bbox=True,

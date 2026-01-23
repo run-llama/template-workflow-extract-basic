@@ -4,13 +4,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Dict, List
 
 import httpx
-from llama_cloud.types import (
+from llama_cloud.types.classifier import (
     ClassifierRule,
     ClassifyJob,
-    ClassifyJobResults,
-    ClassificationResult,
-    FileClassification,
-    StatusEnum,
+)
+from llama_cloud.types.classifier.job_get_results_response import (
+    Item,
+    ItemResult,
+    JobGetResultsResponse,
 )
 
 from ._deterministic import combined_seed, utcnow
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
 @dataclass
 class ClassificationJobRecord:
     job: ClassifyJob
-    results: ClassifyJobResults
+    results: JobGetResultsResponse
     files: List[StoredFile]
 
 
@@ -85,7 +86,7 @@ class FakeClassifyNamespace:
             user_id="fake-user",
             rules=rules,
             parsing_configuration=None,
-            status=StatusEnum.SUCCESS,
+            status="SUCCESS",
             created_at=utcnow(),
             updated_at=utcnow(),
             effective_at=utcnow(),
@@ -125,8 +126,8 @@ class FakeClassifyNamespace:
         job_id: str,
         stored_files: List[StoredFile],
         rules: List[ClassifierRule],
-    ) -> ClassifyJobResults:
-        items: List[FileClassification] = []
+    ) -> JobGetResultsResponse:
+        items: List[Item] = []
         for stored in stored_files:
             seed = combined_seed(stored.sha256, job_id)
             rule_index = seed % len(rules) if rules else 0
@@ -135,19 +136,19 @@ class FakeClassifyNamespace:
             reasoning = (
                 f"Selected rule '{predicted_type}' using deterministic seed {seed}."
             )
-            classification = FileClassification(
+            classification = Item(
                 id=self._server.new_id("classification"),
                 file_id=stored.file.id,
                 classify_job_id=job_id,
                 created_at=utcnow(),
                 updated_at=utcnow(),
-                result=ClassificationResult(
+                result=ItemResult(
                     type=predicted_type,
                     confidence=min(confidence, 0.95),
                     reasoning=reasoning,
                 ),
             )
             items.append(classification)
-        return ClassifyJobResults(
+        return JobGetResultsResponse(
             items=items, next_page_token=None, total_size=len(items)
         )

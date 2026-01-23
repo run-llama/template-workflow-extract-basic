@@ -3,12 +3,9 @@
 from pathlib import Path
 
 import pytest
-from llama_cloud import ExtractConfig
-from llama_cloud.types import ExtractMode
-from llama_cloud_services.extract import LlamaExtract
-from llama_cloud_services.parse import LlamaParse
-
 from extraction_review.testing_utils import FakeLlamaCloudServer
+from llama_cloud import AsyncLlamaCloud
+from llama_cloud.types.extraction.extract_config_param import ExtractConfigParam
 from pydantic import BaseModel, Field
 
 
@@ -38,55 +35,60 @@ def _write_sample_file(tmp_path: Path, name: str, content: str) -> Path:
     return target
 
 
-def test_stateless_extract_is_deterministic(server, tmp_path):
+@pytest.mark.asyncio
+async def test_stateless_extract_is_deterministic(server, tmp_path):
     """Verify stateless extraction produces deterministic results."""
-    extractor = LlamaExtract(api_key="unit-test-key", verify=False)
-    config = ExtractConfig(extraction_mode=ExtractMode.FAST)
+    client = AsyncLlamaCloud(api_key="unit-test-key")
+    config = ExtractConfigParam(extraction_mode="FAST")
     sample_path = _write_sample_file(
         tmp_path, "receipt.txt", "Merchant: Lunar Bistro\nTotal: 123.45"
     )
 
-    first_run = extractor.extract(Receipt, config, sample_path)
-    second_run = extractor.extract(Receipt, config, sample_path)
+    file_obj = await client.files.create(
+        file=sample_path,
+        purpose="extract",
+        external_file_id=str(sample_path),
+    )
+    first_run = await client.extraction.extract(
+        data_schema=Receipt.model_json_schema(),
+        config=config,
+        file_id=file_obj.id,
+    )
+    second_run = await client.extraction.extract(
+        data_schema=Receipt.model_json_schema(),
+        config=config,
+        file_id=file_obj.id,
+    )
 
-    assert first_run.status.value == "SUCCESS"
     assert second_run.data == first_run.data
+    assert isinstance(first_run.data, dict)
     assert "merchant" in first_run.data
     assert server.extract.stateless_run.called
 
 
-def test_agent_flow_uploads_and_processes_files(server, tmp_path):
+@pytest.mark.asyncio
+async def test_agent_flow_uploads_and_processes_files(server, tmp_path):
     """Verify agent flow correctly uploads files and processes them."""
-    extractor = LlamaExtract(api_key="unit-test-key", verify=False)
-    config = ExtractConfig(extraction_mode=ExtractMode.FAST)
-    agent = extractor.create_agent(
-        name="unit-test-agent", data_schema=Receipt, config=config
+    client = AsyncLlamaCloud(api_key="unit-test-key")
+    config = ExtractConfigParam(extraction_mode="FAST")
+    agent = await client.extraction.extraction_agents.create(
+        name="unit-test-agent", data_schema=Receipt.model_json_schema(), config=config
     )
 
     sample_path = _write_sample_file(
         tmp_path, "contract.pdf", "Agreement between parties."
     )
-    run = agent.extract(sample_path)
+    file_obj = await client.files.create(
+        file=sample_path,
+        purpose="extract",
+        external_file_id=str(sample_path),
+    )
+    run = await client.extraction.jobs.extract(
+        extraction_agent_id=agent.id,
+        file_id=file_obj.id,
+    )
 
-    assert run.status.value == "SUCCESS"
+    assert isinstance(run.data, dict)
     assert "merchant" in run.data
 
-    uploaded_bytes = server.files.read(run.file.id)
-    assert uploaded_bytes.startswith(b"Agreement")
     assert server.extract.agent_job.called
-    assert server.extract.agent_run.called
-
-
-def test_parse_load_data_returns_documents(server, tmp_path):
-    """Verify LlamaParse returns documents with expected content."""
-    parser = LlamaParse(
-        api_key="unit-test-key", base_url=FakeLlamaCloudServer.DEFAULT_BASE_URL
-    )
-    sample_path = _write_sample_file(
-        tmp_path, "report.pdf", "Executive summary of quarterly goals."
-    )
-
-    documents = parser.load_data(sample_path)
-
-    assert documents
-    assert "(page 1)" in documents[0].text

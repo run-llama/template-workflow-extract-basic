@@ -1,28 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, cast
 
 import httpx
-import copy
+from llama_cloud.resources.extraction.runs import AsyncPaginatedExtractRuns
 from llama_cloud.types import (
-    ExtractAgent,
-    ExtractConfig,
-    ExtractJob,
-    ExtractRun,
-    ExtractState,
     File as CloudFile,
-    PaginatedExtractRunsResponse,
-    StatusEnum,
 )
+from llama_cloud.types.extraction.extract_agent import ExtractAgent
+from llama_cloud.types.extraction.extract_config import ExtractConfig
+from llama_cloud.types.extraction.extract_job import ExtractJob
+from llama_cloud.types.extraction.extract_run import ExtractRun
+from llama_cloud.types.extraction.extraction_agent_list_response import (
+    ExtractionAgentListResponse,
+)
+from llama_cloud.types.extraction.job_get_result_response import JobGetResultResponse
+from llama_cloud.types.status_enum import StatusEnum
 
 from ._deterministic import (
     combined_seed,
+    fingerprint_file,
     generate_data_from_schema,
     hash_schema,
     utcnow,
 )
-from ._deterministic import fingerprint_file
 from .files import FakeFilesNamespace, StoredFile
 from .matchers import RequestContext, RequestMatcher
 
@@ -144,6 +146,12 @@ class FakeExtractNamespace:
             namespace="extract",
         )
         server.add_route(
+            "PUT",
+            "/api/v1/extraction/extraction-agents/{agent_id}",
+            self._handle_update_agent,
+            namespace="extract",
+        )
+        server.add_route(
             "GET",
             "/api/v1/extraction/extraction-agents/{agent_id}",
             self._handle_get_agent,
@@ -151,20 +159,8 @@ class FakeExtractNamespace:
         )
         server.add_route(
             "GET",
-            "/api/v1/extraction/extraction-agents/by-name/{name}",
-            self._handle_get_agent_by_name,
-            namespace="extract",
-        )
-        server.add_route(
-            "GET",
             "/api/v1/extraction/extraction-agents",
             self._handle_list_agents,
-            namespace="extract",
-        )
-        server.add_route(
-            "GET",
-            "/api/v1/extraction/extraction-agents/default",
-            self._handle_get_default_agent,
             namespace="extract",
         )
         server.add_route(
@@ -189,12 +185,6 @@ class FakeExtractNamespace:
         self.routes["agent_job"] = agent_job_route
         self.agent_job = agent_job_route
         server.add_route(
-            "POST",
-            "/api/v1/extraction/jobs/batch",
-            self._handle_agent_job_batch,
-            namespace="extract",
-        )
-        server.add_route(
             "GET",
             "/api/v1/extraction/jobs",
             self._handle_list_jobs,
@@ -204,6 +194,12 @@ class FakeExtractNamespace:
             "GET",
             "/api/v1/extraction/jobs/{job_id}",
             self._handle_get_job,
+            namespace="extract",
+        )
+        server.add_route(
+            "GET",
+            "/api/v1/extraction/jobs/{job_id}/result",
+            self._handle_get_job_result,
             namespace="extract",
         )
         agent_run_route = server.add_route(
@@ -237,7 +233,7 @@ class FakeExtractNamespace:
     # Handlers -------------------------------------------------------
     def _handle_stateless_run(self, request: httpx.Request) -> httpx.Response:
         payload = self._server.json(request)
-        config = ExtractConfig.parse_obj(payload["config"])
+        config = ExtractConfig.model_validate(payload["config"])
         data_schema = payload["data_schema"]
         schema_hash = hash_schema(data_schema)
 
@@ -258,17 +254,17 @@ class FakeExtractNamespace:
         )
 
         stub = self._pop_stub(self._run_stubs, context)
-        job_status = StatusEnum.SUCCESS
-        run_status = ExtractState.SUCCESS
+        job_status: StatusEnum = "SUCCESS"
+        run_status = "SUCCESS"
         metadata = {"deterministic": {"value": True}}
         error = None
         run_data = self._generate_run_data(data_schema, file_info.sha256)
 
         if stub:
             if stub.job_status:
-                job_status = StatusEnum(stub.job_status)
+                job_status = cast(StatusEnum, stub.job_status)
             if stub.status:
-                run_status = ExtractState(stub.status)
+                run_status = stub.status
             if stub.metadata:
                 metadata = stub.metadata
             if stub.error:
@@ -285,18 +281,18 @@ class FakeExtractNamespace:
             data_schema=data_schema,
             file_info=file_info,
             job_status=job_status,
-            run_status=run_status,
+            run_status=cast(StatusEnum, run_status),
             metadata=metadata,
             data=run_data,
             error=error,
             project_id=file_info.file.project_id,
         )
-        return self._server.json_response(stored.job.dict())
+        return self._server.json_response(stored.job.model_dump())
 
     def _handle_create_agent(self, request: httpx.Request) -> httpx.Response:
         payload = self._server.json(request)
         name = payload["name"]
-        config = ExtractConfig.parse_obj(payload["config"])
+        config = ExtractConfig.model_validate(payload["config"])
         data_schema = payload["data_schema"]
         agent_id = self._server.new_id("agent")
         agent = ExtractAgent(
@@ -313,7 +309,7 @@ class FakeExtractNamespace:
         )
         self._agents[agent_id] = agent
         self._agents_by_name[name] = agent_id
-        return self._server.json_response(agent.dict())
+        return self._server.json_response(agent.model_dump())
 
     def _handle_update_agent(self, request: httpx.Request) -> httpx.Response:
         agent_id = request.url.path.split("/")[-1]
@@ -325,9 +321,9 @@ class FakeExtractNamespace:
         agent = self._agents[agent_id]
         config = payload.get("config", agent.config)
         data_schema = payload.get("data_schema", agent.data_schema)
-        updated = agent.copy(
+        updated = agent.model_copy(
             update={
-                "config": ExtractConfig.parse_obj(config)
+                "config": ExtractConfig.model_validate(config)
                 if isinstance(config, dict)
                 else config,
                 "data_schema": data_schema,
@@ -335,7 +331,7 @@ class FakeExtractNamespace:
             }
         )
         self._agents[agent_id] = updated
-        return self._server.json_response(updated.dict())
+        return self._server.json_response(updated.model_dump())
 
     def _handle_get_agent(self, request: httpx.Request) -> httpx.Response:
         agent_id = request.url.path.split("/")[-1]
@@ -344,22 +340,13 @@ class FakeExtractNamespace:
             return self._server.json_response(
                 {"detail": "Agent not found"}, status_code=404
             )
-        return self._server.json_response(agent.dict())
-
-    def _handle_get_agent_by_name(self, request: httpx.Request) -> httpx.Response:
-        name = request.url.path.split("/")[-1]
-        agent_id = self._agents_by_name.get(name)
-        if not agent_id:
-            return self._server.json_response(
-                {"detail": "Agent not found"}, status_code=404
-            )
-        return self._server.json_response(self._agents[agent_id].dict())
+        return self._server.json_response(agent.model_dump())
 
     def _handle_list_agents(self, request: httpx.Request) -> httpx.Response:
         include_default = (
             request.url.params.get("include_default", "false").lower() == "true"
         )
-        agents = list(self._agents.values())
+        agents: ExtractionAgentListResponse = list(self._agents.values())
         if include_default and not agents:
             default_agent = self._build_ephemeral_agent(
                 ExtractConfig(),
@@ -367,18 +354,7 @@ class FakeExtractNamespace:
                 self._server.default_project_id,
             )
             agents.append(default_agent)
-        return self._server.json_response([agent.dict() for agent in agents])
-
-    def _handle_get_default_agent(self, request: httpx.Request) -> httpx.Response:
-        if self._agents:
-            agent = next(iter(self._agents.values()))
-        else:
-            agent = self._build_ephemeral_agent(
-                ExtractConfig(),
-                {"type": "object", "properties": {}},
-                self._server.default_project_id,
-            )
-        return self._server.json_response(agent.dict())
+        return self._server.json_response([agent.model_dump() for agent in agents])
 
     def _handle_delete_agent(self, request: httpx.Request) -> httpx.Response:
         agent_id = request.url.path.split("/")[-1]
@@ -410,7 +386,7 @@ class FakeExtractNamespace:
         schema = payload.get("data_schema_override", agent.data_schema)
         config_payload = payload.get("config_override", agent.config)
         config = (
-            ExtractConfig.parse_obj(config_payload)
+            ExtractConfig.model_validate(config_payload)
             if isinstance(config_payload, dict)
             else config_payload
         )
@@ -418,14 +394,14 @@ class FakeExtractNamespace:
         stub = self._pop_agent_stub(
             agent_id, RequestContext(request=request, json=payload)
         )
-        job_status = StatusEnum.SUCCESS
-        run_status = ExtractState.SUCCESS
+        job_status: StatusEnum = "SUCCESS"
+        run_status = "SUCCESS"
         error = None
         if stub:
             if stub.job_status:
-                job_status = StatusEnum(stub.job_status)
+                job_status = cast(StatusEnum, stub.job_status)
             if stub.run_status:
-                run_status = ExtractState(stub.run_status)
+                run_status = stub.run_status
             if stub.error:
                 error = stub.error
 
@@ -435,28 +411,28 @@ class FakeExtractNamespace:
             data_schema=schema,
             file_info=stored_file,
             job_status=job_status,
-            run_status=run_status,
+            run_status=cast(StatusEnum, run_status),
             metadata={"agent": {"value": agent.id}},
             data=self._generate_run_data(schema, stored_file.sha256),
             error=error,
             project_id=agent.project_id,
         )
-        return self._server.json_response(stored.job.dict())
+        return self._server.json_response(stored.job.model_dump())
 
-    def _handle_agent_job_batch(self, request: httpx.Request) -> httpx.Response:
-        payload = self._server.json(request)
-        file_ids = payload.get("file_ids", [])
-        jobs = []
-        for file_id in file_ids:
-            request_body = payload.copy()
-            request_body["file_id"] = file_id
-            fake_request = copy.deepcopy(request)
-            fake_request._content = self._server.encode_json(request_body)
-            response = self._handle_agent_job(fake_request)
-            if response.status_code != 200:
-                return response
-            jobs.append(response.json())
-        return self._server.json_response(jobs)
+    def _handle_get_job_result(self, request: httpx.Request) -> httpx.Response:
+        job_id = request.url.path.split("/")[-2]
+        if job_id not in self._jobs:
+            return self._server.json_response(
+                {"detail": f"Job {job_id} not found"}, status_code=404
+            )
+        job = self._jobs[job_id]
+        response = JobGetResultResponse(
+            data=job.run.data,
+            extraction_agent_id=job.run.extraction_agent_id,
+            extraction_metadata=job.run.extraction_metadata or {},
+            run_id=job.run.id,
+        )
+        return self._server.json_response(response.model_dump())
 
     def _handle_list_jobs(self, request: httpx.Request) -> httpx.Response:
         agent_id = request.url.params.get("extraction_agent_id")
@@ -464,7 +440,7 @@ class FakeExtractNamespace:
         for stored in self._jobs.values():
             if agent_id and stored.job.extraction_agent.id != agent_id:
                 continue
-            items.append(stored.job.dict())
+            items.append(stored.job.model_dump())
         return self._server.json_response(items)
 
     def _handle_get_job(self, request: httpx.Request) -> httpx.Response:
@@ -474,7 +450,7 @@ class FakeExtractNamespace:
             return self._server.json_response(
                 {"detail": "Job not found"}, status_code=404
             )
-        return self._server.json_response(stored.job.dict())
+        return self._server.json_response(stored.job.model_dump())
 
     def _handle_get_run_by_job(self, request: httpx.Request) -> httpx.Response:
         job_id = request.url.path.split("/")[-1]
@@ -483,7 +459,7 @@ class FakeExtractNamespace:
             return self._server.json_response(
                 {"detail": "Run not found"}, status_code=404
             )
-        return self._server.json_response(stored.run.dict())
+        return self._server.json_response(stored.run.model_dump())
 
     def _handle_get_run(self, request: httpx.Request) -> httpx.Response:
         run_id = request.url.path.split("/")[-1]
@@ -492,7 +468,7 @@ class FakeExtractNamespace:
             return self._server.json_response(
                 {"detail": "Run not found"}, status_code=404
             )
-        return self._server.json_response(run.dict())
+        return self._server.json_response(run.model_dump())
 
     def _handle_delete_run(self, request: httpx.Request) -> httpx.Response:
         run_id = request.url.path.split("/")[-1]
@@ -507,20 +483,18 @@ class FakeExtractNamespace:
     def _handle_list_runs(self, request: httpx.Request) -> httpx.Response:
         agent_id = request.url.params.get("extraction_agent_id")
         skip = int(request.url.params.get("skip", "0"))
-        limit = int(request.url.params.get("limit", "50"))
         filtered = [
             stored.run
             for stored in self._jobs.values()
             if not agent_id or stored.job.extraction_agent.id == agent_id
         ]
-        page = filtered[skip : skip + limit]
-        response = PaginatedExtractRunsResponse(
+        page = filtered[skip:]
+        response = AsyncPaginatedExtractRuns[ExtractRun](
             items=page,
             skip=skip,
-            limit=limit,
             total=len(filtered),
         )
-        return self._server.json_response(response.dict())
+        return self._server.json_response(response.model_dump())
 
     # Internal helpers -----------------------------------------------
     def _extract_file_info(
@@ -609,7 +583,7 @@ class FakeExtractNamespace:
         data_schema: Dict[str, Any],
         file_info: StoredFile,
         job_status: StatusEnum,
-        run_status: ExtractState,
+        run_status: StatusEnum,
         metadata: Dict[str, Any],
         data: Any,
         error: Optional[str],
@@ -631,7 +605,7 @@ class FakeExtractNamespace:
             job_id=job_id,
             file=file_info.file,
             extraction_agent_id=agent.id,
-            status=run_status,
+            status=cast(Literal["CREATED", "PENDING", "SUCCESS", "ERROR"], run_status),
             config=config,
             data_schema=data_schema,
             data=data,

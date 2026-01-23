@@ -2,26 +2,21 @@ import asyncio
 import hashlib
 import logging
 import os
-from pathlib import Path
 import tempfile
-from typing import Any, Literal, Annotated
+from pathlib import Path
+from typing import Annotated, Any, Literal
 
 import httpx
-from llama_cloud import ExtractRun
-from llama_cloud.client import AsyncLlamaCloud
-from llama_cloud_services.extract import SourceText, LlamaExtract
-from llama_cloud_services.beta.agent_data import (
-    ExtractedData,
-    InvalidExtractionData,
-    AsyncAgentDataClient,
-)
+from llama_cloud import AsyncLlamaCloud
+from llama_cloud.types.beta.extracted_data import ExtractedData, InvalidExtractionData
+from llama_cloud.types.file_query_params import Filter
 from pydantic import BaseModel
-from workflows.resource import Resource
 from workflows import Context, Workflow, step
 from workflows.events import Event, StartEvent, StopEvent
+from workflows.resource import Resource
 
-from .config import EXTRACT_CONFIG, ExtractionSchema
-from .clients import get_llama_cloud_client, get_data_client, get_llama_extract
+from .clients import agent_name, get_llama_cloud_client, project_id
+from .config import EXTRACT_CONFIG, EXTRACTED_DATA_COLLECTION, ExtractionSchema
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +38,14 @@ class Status(Event):
     message: str
 
 
+class ExtractJobStartedEvent(Event):
+    pass
+
+
+class ExtractJobCompletedEvent(Event):
+    pass
+
+
 class ExtractedEvent(Event):
     data: ExtractedData
 
@@ -55,6 +58,8 @@ class ExtractionState(BaseModel):
     file_id: str | None = None
     file_path: str | None = None
     filename: str | None = None
+    file_hash: str | None = None
+    extract_job_id: str | None = None
 
 
 class ProcessFileWorkflow(Workflow):
@@ -82,8 +87,11 @@ class ProcessFileWorkflow(Workflow):
         if state.file_id is None:
             raise ValueError("File ID is not set")
         try:
-            file_metadata = await llama_cloud_client.files.get_file(id=state.file_id)
-            file_url = await llama_cloud_client.files.read_file_content(state.file_id)
+            files = await llama_cloud_client.files.query(
+                filter=Filter(file_ids=[state.file_id])
+            )
+            file_metadata = files.items[0]
+            file_url = await llama_cloud_client.files.get(file_id=state.file_id)
 
             temp_dir = tempfile.gettempdir()
             filename = file_metadata.name
@@ -117,43 +125,82 @@ class ProcessFileWorkflow(Workflow):
         self,
         event: FileDownloadedEvent,
         ctx: Context[ExtractionState],
-        extractor: Annotated[LlamaExtract, Resource(get_llama_extract)],
-    ) -> ExtractedEvent | ExtractedInvalidEvent:
+        llama_cloud_client: Annotated[
+            AsyncLlamaCloud, Resource(get_llama_cloud_client)
+        ],
+    ) -> ExtractJobStartedEvent:
         """Extract structured data fields from the document."""
         state = await ctx.store.get_state()
         if state.file_path is None or state.filename is None:
             raise ValueError("File path or filename is not set")
+        # track the content of the file, so as to be able to de-duplicate
+        file_content = Path(state.file_path).read_bytes()
+        logger.info(f"Extracting data from file {state.filename}")
+        ctx.write_event_to_stream(
+            Status(level="info", message=f"Extracting data from file {state.filename}")
+        )
+
+        extract_job = await llama_cloud_client.extraction.run(
+            config=EXTRACT_CONFIG,
+            data_schema=ExtractionSchema.model_json_schema(),
+            file_id=state.file_id,
+            project_id=project_id,
+        )
+        async with ctx.store.edit_state() as st:
+            st.file_hash = hashlib.sha256(file_content).hexdigest()
+            st.extract_job_id = extract_job.id
+
+        return ExtractJobStartedEvent()
+
+    @step()
+    async def wait_for_extract_job(
+        self,
+        event: ExtractJobStartedEvent,
+        ctx: Context[ExtractionState],
+        llama_cloud_client: Annotated[
+            AsyncLlamaCloud, Resource(get_llama_cloud_client)
+        ],
+    ) -> ExtractJobCompletedEvent:
+        state = await ctx.store.get_state()
+        if state.extract_job_id is None:
+            raise ValueError("Job ID cannot be null when waiting for its completion")
+        await llama_cloud_client.extraction.jobs.wait_for_completion(
+            state.extract_job_id
+        )
+        return ExtractJobCompletedEvent()
+
+    @step()
+    async def get_extraction_job_result(
+        self,
+        event: ExtractJobCompletedEvent,
+        ctx: Context[ExtractionState],
+        llama_cloud_client: Annotated[
+            AsyncLlamaCloud, Resource(get_llama_cloud_client)
+        ],
+    ) -> ExtractedEvent | ExtractedInvalidEvent:
+        state = await ctx.store.get_state()
+        if state.extract_job_id is None:
+            raise ValueError("Job ID cannot be null when getting its result")
+        extracted_result = await llama_cloud_client.extraction.jobs.get_result(
+            state.extract_job_id
+        )
+        extract_run = await llama_cloud_client.extraction.runs.get(
+            run_id=extracted_result.run_id
+        )
         try:
-            # track the content of the file, so as to be able to de-duplicate
-            file_content = Path(state.file_path).read_bytes()
-            file_hash = hashlib.sha256(file_content).hexdigest()
-            source_text = SourceText(
-                file=state.file_path,
-                filename=state.filename,
+            logger.info(f"Extracted data: {extracted_result}")
+            data = ExtractedData.from_extraction_result(
+                result=extract_run,
+                schema=ExtractionSchema,
+                # retain original file name and id, rather than using the extracted duplicate file
+                file_name=state.filename,
+                file_id=state.file_id,
+                file_hash=state.file_hash,
             )
-            logger.info(f"Extracting data from file {state.filename}")
-            ctx.write_event_to_stream(
-                Status(
-                    level="info", message=f"Extracting data from file {state.filename}"
-                )
-            )
-            extracted_result: ExtractRun = await extractor.aextract(
-                data_schema=ExtractionSchema, files=source_text, config=EXTRACT_CONFIG
-            )
-            try:
-                logger.info(f"Extracted data: {extracted_result}")
-                data = ExtractedData.from_extraction_result(
-                    result=extracted_result,
-                    schema=ExtractionSchema,
-                    # retain original file name and id, rather than using the extracted duplicate file
-                    file_name=state.filename,
-                    file_id=state.file_id,
-                    file_hash=file_hash,
-                )
-                return ExtractedEvent(data=data)
-            except InvalidExtractionData as e:
-                logger.error(f"Error validating extracted data: {e}", exc_info=True)
-                return ExtractedInvalidEvent(data=e.invalid_item)
+            return ExtractedEvent(data=data)
+        except InvalidExtractionData as e:
+            logger.error(f"Error validating extracted data: {e}", exc_info=True)
+            return ExtractedInvalidEvent(data=e.invalid_item)
         except Exception as e:
             logger.error(
                 f"Error extracting data from file {state.filename}: {e}",
@@ -172,46 +219,40 @@ class ProcessFileWorkflow(Workflow):
         self,
         event: ExtractedEvent | ExtractedInvalidEvent,
         ctx: Context,
-        data_client: Annotated[AsyncAgentDataClient, Resource(get_data_client)],
+        llama_cloud_client: Annotated[
+            AsyncLlamaCloud, Resource(get_llama_cloud_client)
+        ],
     ) -> StopEvent:
         """Save extracted data for human review and correction."""
-        try:
-            logger.info(f"Recorded extracted data for file {event.data.file_name}")
-            ctx.write_event_to_stream(
-                Status(
-                    level="info",
-                    message=f"Recorded extracted data for file {event.data.file_name}",
-                )
-            )
-            # remove past data when reprocessing the same file
-            if event.data.file_hash:
-                await data_client.delete(
-                    filter={
-                        "file_hash": {
-                            "eq": event.data.file_hash,
-                        },
+        data = event.data.model_dump()
+        # remove past data when reprocessing the same file
+        if event.data.file_hash is not None:
+            await llama_cloud_client.beta.agent_data.delete_by_query(
+                deployment_name=agent_name or "_public",
+                collection=EXTRACTED_DATA_COLLECTION,
+                filter={
+                    "file_hash": {
+                        "eq": event.data.file_hash,
                     },
-                )
-                logger.info(
-                    f"Removing past data for file {event.data.file_name} with hash {event.data.file_hash}"
-                )
-            # finally, save the new data
-            item_id = await data_client.create_item(event.data)
-            return StopEvent(
-                result=item_id.id,
+                },
             )
-        except Exception as e:
-            logger.error(
-                f"Error recording extracted data for file {event.data.file_name}: {e}",
-                exc_info=True,
+        logger.info(
+            f"Removing past data for file {event.data.file_name} with hash {event.data.file_hash}"
+        )
+        # finally, save the new data
+        item = await llama_cloud_client.beta.agent_data.agent_data(
+            data=data,
+            deployment_name=agent_name or "_public",
+            collection=EXTRACTED_DATA_COLLECTION,
+        )
+        logger.info(f"Recorded extracted data for file {event.data.file_name or ''}")
+        ctx.write_event_to_stream(
+            Status(
+                level="info",
+                message=f"Recorded extracted data for file {event.data.file_name or ''}",
             )
-            ctx.write_event_to_stream(
-                Status(
-                    level="error",
-                    message=f"Error recording extracted data for file {event.data.file_name}: {e}",
-                )
-            )
-            raise e
+        )
+        return StopEvent(result=item.id)
 
 
 workflow = ProcessFileWorkflow(timeout=None)
@@ -223,8 +264,9 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
 
     async def main():
-        file = await get_llama_cloud_client().files.upload_file(
-            upload_file=Path("test.pdf").open("rb")
+        file = await get_llama_cloud_client().files.create(
+            file=Path("test.pdf").open("rb"),
+            purpose="extract",
         )
         await workflow.run(start_event=FileEvent(file_id=file.id))
 

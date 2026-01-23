@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import random
-from jsonref import replace_refs
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, MutableMapping
+
+from jsonref import JsonRef, replace_refs
 
 
 def hash_chunks(chunks: Iterable[bytes]) -> str:
@@ -116,6 +117,9 @@ def _generate_value(schema: Any, rng: random.Random, depth: int) -> Any:
                 generate_text_blob(rng.randint(0, 1_000_000), sentences=1),
             )
         )
+
+    if isinstance(schema, JsonRef):
+        schema = dict(schema)  # type: ignore
 
     if schema is None:
         return generate_text_blob(rng.randint(0, 1_000_000), sentences=1)

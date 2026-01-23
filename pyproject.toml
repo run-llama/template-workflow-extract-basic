@@ -5,7 +5,6 @@ description = "Extracts data"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "llama-cloud-services>=0.6.69",
     "llama-index-workflows>=2.11.3,<3.0.0",
     "python-dotenv>=1.1.0",
     "jsonref>=1.1.0",
@@ -13,6 +12,7 @@ dependencies = [
     "httpx>=0.28.1",
     "llama-index-core>=0.14.0",
     "respx>=0.22.0,<1",
+    "llama-cloud>=1.0.0b7",
 ]
 
 [dependency-groups]

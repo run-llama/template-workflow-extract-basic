@@ -1,153 +1,179 @@
 """Tests for the FakeParseNamespace mock implementation."""
 
 import pytest
-import httpx
-
+import respx
 from extraction_review.testing_utils import FakeLlamaCloudServer
+from llama_cloud import APIStatusError, AsyncLlamaCloud
 
 
 @pytest.fixture
 def server():
     """Provide a server with parse namespace enabled."""
-    with FakeLlamaCloudServer(namespaces=["parse"]) as srv:
+    with FakeLlamaCloudServer() as srv:
         yield srv
 
 
-def _make_multipart_body(
-    filename: str, content: bytes = b"fake pdf content"
-) -> tuple[bytes, str]:
-    """Create a multipart form body with the given filename."""
-    boundary = "----TestBoundary123"
-    body = (
-        (
-            f"------{boundary}\r\n"
-            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-            f"Content-Type: application/pdf\r\n"
-            f"\r\n"
-        ).encode()
-        + content
-        + f"\r\n------{boundary}--\r\n".encode()
+@pytest.fixture()
+def client() -> AsyncLlamaCloud:
+    return AsyncLlamaCloud(api_key="fake-api-key")
+
+
+@pytest.fixture()
+def data() -> tuple[str, bytes, str]:
+    with open("tests/files/test.pdf", "rb") as f:
+        content = f.read()
+    return ("tests/files/test.pdf", content, "application/pdf")
+
+
+@pytest.mark.asyncio
+async def test_parse_with_upload_file(
+    server: FakeLlamaCloudServer, client: AsyncLlamaCloud, data: tuple[str, bytes, str]
+) -> None:
+    job_create = await client.parsing.create(
+        tier="fast",
+        version="latest",
+        upload_file=data,
     )
-    return body, boundary
-
-
-def test_job_result_excludes_duplicate_fields(server):
-    """Verify job result doesn't include job_id/file_name to avoid duplicate arg errors.
-
-    The llama_cloud_services library's JobResult.__init__ passes job_id and
-    file_name as explicit args AND spreads the job_result dict. If both are
-    present, it causes "multiple values for keyword argument" errors.
-    """
-    body, boundary = _make_multipart_body("test.pdf")
-
-    upload_response = httpx.post(
-        f"{server.DEFAULT_BASE_URL}/api/parsing/upload",
-        content=body,
-        headers={"Content-Type": f"multipart/form-data; boundary=----{boundary}"},
+    assert job_create.error_message is None
+    assert job_create.status == "COMPLETED"
+    assert job_create.project_id == server.default_project_id
+    job_response = await client.parsing.get(
+        job_id=job_create.id, expand=["text", "markdown", "items"]
     )
-    assert upload_response.status_code == 200
-    job_id = upload_response.json()["id"]
+    assert job_response.job.id == job_create.id
+    assert job_response.job.status == job_create.status
+    assert job_response.job.project_id == job_create.project_id
+    assert job_response.items is not None
+    assert job_response.markdown is not None
+    assert job_response.text is not None
 
-    result_response = httpx.get(
-        f"{server.DEFAULT_BASE_URL}/api/parsing/job/{job_id}/result/json"
+
+@pytest.mark.asyncio
+async def test_parse_with_different_expand(
+    server: FakeLlamaCloudServer, client: AsyncLlamaCloud, data: tuple[str, bytes, str]
+) -> None:
+    job_create = await client.parsing.create(
+        tier="fast",
+        version="latest",
+        upload_file=data,
     )
-    assert result_response.status_code == 200
-    result = result_response.json()
+    job_response = await client.parsing.get(job_id=job_create.id, expand=["text"])
+    assert job_response.items is None
+    assert job_response.markdown is None
+    assert job_response.text is not None
+    job_response = await client.parsing.get(job_id=job_create.id, expand=["markdown"])
+    assert job_response.items is None
+    assert job_response.markdown is not None
+    assert job_response.text is None
+    job_response = await client.parsing.get(job_id=job_create.id, expand=["items"])
+    assert job_response.items is not None
+    assert job_response.markdown is None
+    assert job_response.text is None
+    # no expands -> defaul to items
+    job_response = await client.parsing.get(job_id=job_create.id)
+    assert job_response.items is not None
+    assert job_response.markdown is None
+    assert job_response.text is None
 
-    # These fields should NOT be in the result to avoid duplicate argument errors
-    assert "job_id" not in result, "job_id should be excluded from result"
-    assert "file_name" not in result, "file_name should be excluded from result"
 
-    # But other expected fields should still be present
-    assert "status" in result
-    assert "is_done" in result
-    assert "pages" in result
-
-
-def test_filename_with_double_quotes(server):
-    """Verify filename is correctly parsed from double-quoted Content-Disposition."""
-    body, boundary = _make_multipart_body("my_document.pdf")
-
-    response = httpx.post(
-        f"{server.DEFAULT_BASE_URL}/api/parsing/upload",
-        content=body,
-        headers={"Content-Type": f"multipart/form-data; boundary=----{boundary}"},
+@pytest.mark.asyncio
+async def test_parse_with_file_id(
+    server: FakeLlamaCloudServer, client: AsyncLlamaCloud, data: tuple[str, bytes, str]
+) -> None:
+    file_name, _, _ = data
+    file_obj = await client.files.create(
+        file=file_name,
+        purpose="parse",
+        external_file_id=file_name,
     )
-    assert response.status_code == 200
-    job_id = response.json()["id"]
-
-    job = server.parse._jobs[job_id]
-    assert job.file_name == "my_document.pdf"
-
-
-def test_filename_with_single_quotes(server):
-    """Verify filename is correctly parsed from single-quoted Content-Disposition."""
-    boundary = "----TestBoundary789"
-    body = (
-        f"------{boundary}\r\n"
-        f"Content-Disposition: form-data; name=\"file\"; filename='single_quoted.pdf'\r\n"
-        f"Content-Type: application/pdf\r\n"
-        f"\r\n"
-        f"fake pdf content\r\n"
-        f"------{boundary}--\r\n"
-    ).encode()
-
-    response = httpx.post(
-        f"{server.DEFAULT_BASE_URL}/api/parsing/upload",
-        content=body,
-        headers={"Content-Type": f"multipart/form-data; boundary=----{boundary}"},
+    job_create = await client.parsing.create(
+        tier="fast",
+        version="latest",
+        file_id=file_obj.id,
     )
-    assert response.status_code == 200
-    job_id = response.json()["id"]
-
-    job = server.parse._jobs[job_id]
-    assert job.file_name == "single_quoted.pdf"
-
-
-def test_filename_does_not_capture_subsequent_headers(server):
-    """Verify filename parsing stops at header boundary, not capturing Content-Type."""
-    body, boundary = _make_multipart_body("test.pdf")
-
-    response = httpx.post(
-        f"{server.DEFAULT_BASE_URL}/api/parsing/upload",
-        content=body,
-        headers={"Content-Type": f"multipart/form-data; boundary=----{boundary}"},
+    assert job_create.error_message is None
+    assert job_create.status == "COMPLETED"
+    assert job_create.project_id == server.default_project_id
+    job_response = await client.parsing.get(
+        job_id=job_create.id, expand=["text", "markdown", "items"]
     )
-    assert response.status_code == 200
-    job_id = response.json()["id"]
+    assert job_response.job.id == job_create.id
+    assert job_response.job.status == job_create.status
+    assert job_response.job.project_id == job_create.project_id
+    assert job_response.items is not None
+    assert job_response.markdown is not None
+    assert job_response.text is not None
 
-    job = server.parse._jobs[job_id]
-    # Should be just "test.pdf", not "test.pdf\r\nContent-Type: application/pdf"
-    assert job.file_name == "test.pdf"
-    assert "Content-Type" not in job.file_name
+
+@pytest.mark.asyncio
+async def test_parse_with_file_id_file_not_found(
+    server: FakeLlamaCloudServer,
+    client: AsyncLlamaCloud,
+) -> None:
+    with pytest.raises(APIStatusError) as exc_info:
+        await client.parsing.create(
+            tier="fast",
+            version="latest",
+            file_id="does-not-exist",
+        )
+    assert exc_info.value.status_code == 404
 
 
-def test_job_status_endpoint(server):
-    """Verify job status endpoint returns correct status."""
-    body, boundary = _make_multipart_body("status_test.pdf")
+@pytest.mark.asyncio
+async def test_parse_without_fileid_or_sourceurl(
+    server: FakeLlamaCloudServer,
+    client: AsyncLlamaCloud,
+) -> None:
+    with pytest.raises(APIStatusError) as exc_info:
+        await client.parsing.create(
+            tier="fast",
+            version="latest",
+        )
+    assert exc_info.value.status_code == 400
 
-    upload_response = httpx.post(
-        f"{server.DEFAULT_BASE_URL}/api/parsing/upload",
-        content=body,
-        headers={"Content-Type": f"multipart/form-data; boundary=----{boundary}"},
+
+@pytest.mark.asyncio
+@respx.mock(assert_all_mocked=False)
+async def test_parse_with_source_url(
+    server: FakeLlamaCloudServer,
+    client: AsyncLlamaCloud,
+) -> None:
+    job_create = await client.parsing.create(
+        tier="fast",
+        version="latest",
+        source_url="https://pdfobject.com/pdf/sample.pdf",
     )
-    job_id = upload_response.json()["id"]
-
-    status_response = httpx.get(f"{server.DEFAULT_BASE_URL}/api/parsing/job/{job_id}")
-    assert status_response.status_code == 200
-    status = status_response.json()
-    assert status["id"] == job_id
-    assert status["status"] == "SUCCESS"
-
-
-def test_job_not_found_returns_404(server):
-    """Verify non-existent job returns 404."""
-    response = httpx.get(
-        f"{server.DEFAULT_BASE_URL}/api/parsing/job/nonexistent-job-id"
+    assert job_create.error_message is None
+    assert job_create.status == "COMPLETED"
+    assert job_create.project_id == server.default_project_id
+    job_response = await client.parsing.get(
+        job_id=job_create.id, expand=["text", "markdown", "items"]
     )
-    assert response.status_code == 404
+    assert job_response.job.id == job_create.id
+    assert job_response.job.status == job_create.status
+    assert job_response.job.project_id == job_create.project_id
+    assert job_response.items is not None
+    assert job_response.markdown is not None
+    assert job_response.text is not None
 
-    result_response = httpx.get(
-        f"{server.DEFAULT_BASE_URL}/api/parsing/job/nonexistent-job-id/result/json"
+
+@pytest.mark.asyncio
+async def test_parse_e2e(
+    server: FakeLlamaCloudServer, client: AsyncLlamaCloud, data: tuple[str, bytes, str]
+) -> None:
+    file_name, _, _ = data
+    file_obj = await client.files.create(
+        file=file_name,
+        purpose="parse",
+        external_file_id=file_name,
     )
-    assert result_response.status_code == 404
+    result = await client.parsing.parse(
+        file_id=file_obj.id,
+        expand=["markdown"],
+        tier="agentic",
+        version="latest",
+    )
+    assert result.markdown is not None
+    assert len(result.markdown.pages) == 1
+    assert hasattr(result.markdown.pages[0], "markdown")
+    assert isinstance(result.markdown.pages[0].markdown, str)  # type: ignore

@@ -9,14 +9,14 @@ from urllib.parse import urlencode
 import httpx
 import respx
 from llama_cloud.types import File as CloudFile
-from llama_cloud.types import FileIdPresignedUrl, PresignedUrl
+from llama_cloud.types.file_query_response import FileQueryResponse, Item
+from llama_cloud.types.presigned_url import PresignedURL
 
 from ._deterministic import (
     fingerprint_file,
-    hash_chunks,
     utcnow,
 )
-from .matchers import RequestContext, RequestMatcher
+from .matchers import RequestMatcher
 
 if TYPE_CHECKING:
     from .server import FakeLlamaCloudServer
@@ -80,6 +80,20 @@ class FakeFilesNamespace:
     def get(self, file_id: str) -> Optional[StoredFile]:
         return self._files.get(file_id)
 
+    def preload_from_source(self, filename: str, content: bytes) -> str:
+        file_id = self._server.new_id("file")
+        name = filename
+        stored = self._build_file(
+            file_id=file_id,
+            name=name,
+            project_id=self._server.default_project_id,
+            organization_id=self._server.default_organization_id,
+            content=content,
+            external_file_id=None,
+        )
+        self._files[file_id] = stored
+        return file_id
+
     def stub_upload(
         self,
         matcher: Optional[RequestMatcher],
@@ -94,16 +108,9 @@ class FakeFilesNamespace:
     # Route registration ---------------------------------------------
     def register(self) -> None:
         server = self._server
-        server.add_route(
-            "PUT",
-            "/api/v1/files",
-            self._handle_generate_presigned_url,
-            namespace="files",
-            alias="generate_presigned_url",
-        )
         upload_route = server.add_route(
             "POST",
-            "/api/v1/files",
+            "/api/v1/beta/files",
             self._handle_direct_upload,
             namespace="files",
             alias="upload",
@@ -111,32 +118,24 @@ class FakeFilesNamespace:
         self.routes["upload"] = upload_route
         get_route = server.add_route(
             "GET",
-            "/api/v1/files/{file_id}",
-            self._handle_get_metadata,
+            "/api/v1/beta/files/{file_id}/content",
+            self._handle_read_content,
             namespace="files",
             alias="get",
         )
         self.routes["get"] = get_route
         server.add_route(
             "DELETE",
-            "/api/v1/files/{file_id}",
+            "/api/v1/beta/files/{file_id}",
             self._handle_delete,
             namespace="files",
         )
         server.add_route(
-            "GET",
-            "/api/v1/files/{file_id}/content",
-            self._handle_read_content,
+            "POST",
+            "/api/v1/beta/files/query",
+            self._handle_query,
             namespace="files",
-            alias="read_content",
-        )
-        server.add_route(
-            "PUT",
-            "/upload/{file_id}",
-            self._handle_presigned_upload,
-            namespace="files",
-            base_urls=[self._upload_base_url],
-            alias="presigned_upload",
+            alias="query",
         )
         server.add_route(
             "GET",
@@ -148,32 +147,6 @@ class FakeFilesNamespace:
         )
 
     # Handlers -------------------------------------------------------
-    def _handle_generate_presigned_url(self, request: httpx.Request) -> httpx.Response:
-        data = self._server.json(request)
-        now = utcnow()
-        file_id = self._server.new_id("file")
-        name = data.get("name") or f"upload-{file_id}.bin"
-        pending = PendingUpload(
-            file_id=file_id,
-            filename=name,
-            project_id=request.url.params.get(
-                "project_id", self._server.default_project_id
-            ),
-            organization_id=request.url.params.get(
-                "organization_id", self._server.default_organization_id
-            ),
-            external_file_id=data.get("external_file_id"),
-            expected_size=data.get("file_size"),
-        )
-        self._pending[file_id] = pending
-        presigned = FileIdPresignedUrl(
-            file_id=file_id,
-            url=f"{self._upload_base_url}/upload/{file_id}",
-            expires_at=now,
-            form_fields=None,
-        )
-        return self._server.json_response(presigned.dict())
-
     def _handle_direct_upload(self, request: httpx.Request) -> httpx.Response:
         file_bytes, filename = self._extract_multipart_file(request)
         file_id = self._server.new_id("file")
@@ -190,15 +163,7 @@ class FakeFilesNamespace:
             external_file_id=request.url.params.get("external_file_id"),
         )
         self._files[file_id] = stored
-        return self._server.json_response(stored.file.dict())
-
-    def _handle_get_metadata(self, request: httpx.Request) -> httpx.Response:
-        file_id = request.url.path.split("/")[-1]
-        if file_id not in self._files:
-            return self._server.json_response(
-                {"detail": "File not found"}, status_code=404
-            )
-        return self._server.json_response(self._files[file_id].file.dict())
+        return self._server.json_response(stored.file.model_dump())
 
     def _handle_delete(self, request: httpx.Request) -> httpx.Response:
         file_id = request.url.path.split("/")[-1]
@@ -212,47 +177,12 @@ class FakeFilesNamespace:
             return self._server.json_response(
                 {"detail": "File not found"}, status_code=404
             )
-        presigned = PresignedUrl(
+        presigned = PresignedURL(
             url=f"{self._download_base_url}/files/{file_id}?{urlencode({'token': 'fake'})}",
             expires_at=utcnow(),
             form_fields=None,
         )
-        return self._server.json_response(presigned.dict())
-
-    def _handle_presigned_upload(self, request: httpx.Request) -> httpx.Response:
-        file_id = request.url.path.split("/")[-1]
-        pending = self._pending.get(file_id)
-
-        context = RequestContext(
-            request=request,
-            json=None,
-            file_id=file_id,
-            filename=pending.filename if pending else None,
-            file_sha256=hash_chunks([request.content]),
-        )
-
-        for index, (matcher, status, body, once) in enumerate(list(self._upload_stubs)):
-            if context.matches(matcher):
-                if once:
-                    self._upload_stubs.pop(index)
-                return self._server.json_response(body, status_code=status)
-
-        if pending is None:
-            return self._server.json_response(
-                {"detail": "Unknown file"}, status_code=404
-            )
-
-        stored = self._build_file(
-            file_id=file_id,
-            name=pending.filename,
-            project_id=pending.project_id,
-            organization_id=pending.organization_id,
-            content=request.content,
-            external_file_id=pending.external_file_id,
-        )
-        self._files[file_id] = stored
-        self._pending.pop(file_id, None)
-        return httpx.Response(204)
+        return self._server.json_response(presigned.model_dump())
 
     def _handle_presigned_download(self, request: httpx.Request) -> httpx.Response:
         file_id = request.url.path.split("/")[-1]
@@ -260,6 +190,34 @@ class FakeFilesNamespace:
         if not stored:
             return httpx.Response(404, json={"detail": "File not found"})
         return httpx.Response(200, content=stored.content)
+
+    def _handle_query(self, request: httpx.Request) -> httpx.Response:
+        payload = self._server.json(request)
+        files: list[StoredFile] = []
+        items: list[Item] = []
+        if payload.get("filter") is not None:
+            file_ids = payload["filter"].get("file_ids", [])
+            for file_id in self._files:
+                if file_id in file_ids:
+                    files.append(self._files[file_id])
+        else:
+            files = list(self._files.values())
+        for f in files:
+            item = Item(
+                id=f.file.id,
+                name=f.file.name,
+                project_id=self._server.default_project_id,
+                expires_at=utcnow(),
+                external_file_id=f.file.external_file_id,
+                purpose=f.file.purpose,
+                last_modified_at=utcnow(),
+                file_type=f.file.file_type,
+            )
+            items.append(item)
+        response = FileQueryResponse(
+            items=items, next_page_token=None, total_size=len(items)
+        )
+        return self._server.json_response(response.model_dump())
 
     # Internal helpers -----------------------------------------------
     def _build_file(

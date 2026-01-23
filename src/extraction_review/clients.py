@@ -1,16 +1,9 @@
-import os
-from typing import Any
-import httpx
-
-from llama_cloud_services import LlamaExtract
-from llama_cloud_services.beta.agent_data import AsyncAgentDataClient, ExtractedData
-from llama_cloud.client import AsyncLlamaCloud
-from .testing_utils import FakeLlamaCloudServer
 import logging
+import os
 
-from extraction_review.config import (
-    EXTRACTED_DATA_COLLECTION,
-)
+from llama_cloud import AsyncLlamaCloud
+
+from .testing_utils import FakeLlamaCloudServer
 
 logger = logging.getLogger(__name__)
 
@@ -31,27 +24,6 @@ else:
     fake = None
 
 
-def get_llama_extract() -> LlamaExtract:
-    """Document extractor for parsing and extracting structured fields."""
-    return LlamaExtract(api_key=api_key, base_url=base_url, project_id=project_id)
-
-
-def get_data_client() -> AsyncAgentDataClient:
-    """Storage for extracted data, enabling human review and corrections."""
-    return AsyncAgentDataClient(
-        deployment_name=agent_name,
-        collection=EXTRACTED_DATA_COLLECTION,
-        type=ExtractedData[Any],
-        client=get_llama_cloud_client(),
-    )
-
-
 def get_llama_cloud_client() -> AsyncLlamaCloud:
     """Cloud services connection for file storage and processing."""
-    return AsyncLlamaCloud(
-        base_url=base_url,
-        token=api_key,
-        httpx_client=httpx.AsyncClient(
-            timeout=60, headers={"Project-Id": project_id} if project_id else None
-        ),
-    )
+    return AsyncLlamaCloud(api_key=api_key, base_url=base_url)

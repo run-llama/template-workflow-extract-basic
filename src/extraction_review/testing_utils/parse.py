@@ -1,12 +1,27 @@
 from __future__ import annotations
 
 import re
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict
 
 import httpx
+from llama_cloud.types.parsing_create_response import ParsingCreateResponse
+from llama_cloud.types.parsing_get_response import (
+    Items,
+    ItemsPage,
+    ItemsPageStructuredResultPage,
+    ItemsPageStructuredResultPageItemTextItem,
+    Job,
+    Markdown,
+    MarkdownPage,
+    MarkdownPageMarkdownResultPage,
+    ParsingGetResponse,
+    Text,
+    TextPage,
+)
 
-from ._deterministic import generate_text_blob, hash_schema
+from ._deterministic import generate_text_blob, hash_schema, utcnow
 
 if TYPE_CHECKING:
     from .server import FakeLlamaCloudServer
@@ -24,103 +39,191 @@ class ParseJobRecord:
 class FakeParseNamespace:
     def __init__(self, *, server: "FakeLlamaCloudServer") -> None:
         self._server = server
-        self._jobs: Dict[str, ParseJobRecord] = {}
+        self._jobs: Dict[str, ParsingGetResponse] = {}
         self.routes: Dict[str, Any] = {}
+        self.allowed_expands = ("text", "markdown", "items")
 
     def register(self) -> None:
         server = self._server
         server.add_route(
             "POST",
-            "/api/parsing/upload",
+            "/api/v2/parse/upload",
             self._handle_upload,
             namespace="parse",
         )
         server.add_route(
             "GET",
-            "/api/parsing/job/{job_id}",
-            self._handle_job_status,
+            "/api/v2/parse/{job_id}",
+            self._handle_job_result,
             namespace="parse",
         )
         server.add_route(
-            "GET",
-            "/api/parsing/job/{job_id}/result/{result_type}",
-            self._handle_job_result,
+            "POST",
+            "/api/v2/parse",
+            self._handle_file_id_source_url,
             namespace="parse",
         )
 
     def _handle_upload(self, request: httpx.Request) -> httpx.Response:
-        file_bytes, filename, form_data = self._split_multipart(request)
+        _, filename, form_data = self._split_multipart(request)
         job_id = self._server.new_id("parse-job")
         seed_hash = hash_schema({"filename": filename, "form": form_data})
         seed = int(seed_hash[:16], 16)
         page_text = generate_text_blob(seed, sentences=3)
-        pages: list[Dict[str, Any]] = [
-            {
-                "page": index + 1,
-                "text": f"{page_text} (page {index + 1})",
-                "md": f"{page_text} (page {index + 1})",
-                "images": [],
-                "charts": [],
-                "tables": [],
-                "layout": [],
-                "items": [],
-                "status": "SUCCESS",
-                "links": [],
-                "width": 8.5,
-                "height": 11.0,
-                "parsingMode": "deterministic",
-                "structuredData": {},
-                "noStructuredContent": False,
-                "noTextContent": False,
-                "isAudioTranscript": False,
-                "durationInSeconds": None,
-                "slideSpeakerNotes": None,
-            }
-            for index in range(1)
+        item_pages: list[ItemsPage] = [
+            ItemsPageStructuredResultPage(
+                items=[
+                    ItemsPageStructuredResultPageItemTextItem(
+                        md=page_text, value=page_text, bBox=None, type="text"
+                    )
+                ],
+                page_height=1,
+                page_number=1,
+                page_width=1,
+                success=True,
+            )
         ]
-        result = {
-            "job_id": job_id,
-            "status": "SUCCESS",
-            "file_name": filename,
-            "is_done": True,
-            "pages": pages,
-            "job_metadata": {"job_pages": len(pages)},
-            "text": "\n\n".join(str(page["text"]) for page in pages),
-            "markdown": "\n\n".join(str(page["md"]) for page in pages),
-            "json": {"pages": pages},
-        }
-        record = ParseJobRecord(
-            job_id=job_id,
-            file_name=filename,
-            status="SUCCESS",
-            result=result,
-            content=file_bytes,
+        md_pages: list[MarkdownPage] = [
+            MarkdownPageMarkdownResultPage(
+                markdown=page_text,
+                page_number=1,
+                success=True,
+            )
+        ]
+        txt_pages: list[TextPage] = [
+            TextPage(
+                text=page_text,
+                page_number=1,
+            )
+        ]
+        record = ParsingGetResponse(
+            job=Job(
+                id=job_id,
+                status="COMPLETED",
+                project_id=self._server.default_project_id,
+                created_at=utcnow(),
+                updated_at=utcnow(),
+                error_message=None,
+            ),
+            items=Items(pages=item_pages),
+            markdown=Markdown(pages=md_pages),
+            text=Text(pages=txt_pages),
         )
         self._jobs[job_id] = record
-        return self._server.json_response({"id": job_id})
+        response = ParsingCreateResponse(
+            id=job_id,
+            project_id=self._server.default_project_id,
+            status="COMPLETED",
+            created_at=utcnow(),
+            updated_at=utcnow(),
+            error_message=None,
+        )
+        return self._server.json_response(response.model_dump())
 
-    def _handle_job_status(self, request: httpx.Request) -> httpx.Response:
-        job_id = request.url.path.split("/")[-1]
-        job = self._jobs.get(job_id)
-        if not job:
+    def _handle_file_id_source_url(self, request: httpx.Request) -> httpx.Response:
+        payload = self._server.json(request)
+        file_id = payload.get("file_id")
+        source_url = payload.get("source_url")
+        if file_id is not None:
+            file = self._server.files.get(file_id)
+            if file is None:
+                return self._server.json_response(
+                    {"details": f"File {file_id} not found"},
+                    status_code=404,
+                )
+            else:
+                seed_hash = file.sha256
+        elif source_url is not None:
+            response = self._get_file_from_source_url(source_url)
+            if isinstance(response, int):
+                return self._server.json_response(
+                    {"details": f"Could not find file associated with {source_url}"},
+                    status_code=response,
+                )
+            file_content, filename = response
+            file_id = self._server.files.preload_from_source(filename, file_content)
+            seed_hash = self._server.files._files[file_id].sha256
+        else:
             return self._server.json_response(
-                {"detail": "Job not found"}, status_code=404
+                {
+                    "details": "At least one between file_id and source_url should be not-null",
+                },
+                status_code=400,
             )
-        return self._server.json_response({"id": job_id, "status": job.status})
+        job_id = self._server.new_id("parse-job")
+        seed = int(seed_hash[:16], 16)
+        page_text = generate_text_blob(seed, sentences=3)
+        item_pages: list[ItemsPage] = [
+            ItemsPageStructuredResultPage(
+                items=[
+                    ItemsPageStructuredResultPageItemTextItem(
+                        md=page_text, value=page_text, bBox=None, type="text"
+                    )
+                ],
+                page_height=1,
+                page_number=1,
+                page_width=1,
+                success=True,
+            )
+        ]
+        md_pages: list[MarkdownPage] = [
+            MarkdownPageMarkdownResultPage(
+                markdown=page_text,
+                page_number=1,
+                success=True,
+            )
+        ]
+        txt_pages: list[TextPage] = [
+            TextPage(
+                text=page_text,
+                page_number=1,
+            )
+        ]
+        record = ParsingGetResponse(
+            job=Job(
+                id=job_id,
+                status="COMPLETED",
+                project_id=self._server.default_project_id,
+                created_at=utcnow(),
+                updated_at=utcnow(),
+                error_message=None,
+            ),
+            items=Items(pages=item_pages),
+            markdown=Markdown(pages=md_pages),
+            text=Text(pages=txt_pages),
+        )
+        self._jobs[job_id] = record
+        response = ParsingCreateResponse(
+            id=job_id,
+            project_id=self._server.default_project_id,
+            status="COMPLETED",
+            created_at=utcnow(),
+            updated_at=utcnow(),
+            error_message=None,
+        )
+        return self._server.json_response(response.model_dump())
 
     def _handle_job_result(self, request: httpx.Request) -> httpx.Response:
-        job_id = request.url.path.split("/")[-3]
-        job = self._jobs.get(job_id)
-        if not job:
+        job_id = request.url.path.split("/")[-1]
+        expandees = request.url.params.get_list("expand")
+        expandees = (
+            [e for e in expandees if e in self.allowed_expands]
+            if len(expandees) > 0
+            else ["items"]
+        )
+        job_response = self._jobs.get(job_id)
+        if not job_response:
             return self._server.json_response(
                 {"detail": "Result not found"}, status_code=404
             )
-        # Exclude job_id and file_name from result to avoid duplicate argument
-        # errors in JobResult.__init__ which passes these explicitly and spreads the dict
-        result = {
-            k: v for k, v in job.result.items() if k not in ("job_id", "file_name")
-        }
-        return self._server.json_response(result)
+        jb_resp_copy = deepcopy(job_response)
+        if "markdown" not in expandees:
+            jb_resp_copy.markdown = None
+        if "text" not in expandees:
+            jb_resp_copy.text = None
+        if "items" not in expandees:
+            jb_resp_copy.items = None
+        return self._server.json_response(jb_resp_copy.model_dump())
 
     def _split_multipart(
         self, request: httpx.Request
@@ -163,3 +266,12 @@ class FakeParseNamespace:
         if not file_bytes:
             raise ValueError("File part missing from multipart payload")
         return file_bytes, filename, form_data
+
+    def _get_file_from_source_url(self, source_url: str) -> tuple[bytes, str] | int:
+        name = source_url.split("/")[-1]
+        with httpx.Client() as client:
+            response = client.get(source_url, follow_redirects=True)
+        if response.status_code >= 400:
+            return response.status_code
+        content = response.content
+        return content, name
