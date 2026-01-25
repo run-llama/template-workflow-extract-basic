@@ -120,6 +120,9 @@ def create_union_schema(
     a single presentation schema that can hold any of them. This keeps fields
     flat (preserving field_metadata for citations) while adding a discriminator.
 
+    For multi-document-type workflows, use a Resource function that takes
+    ResourceConfig-annotated parameters (see example at end of this file).
+
     Args:
         schemas: Map of document type names to their JSON schemas.
             E.g., {"10-K": schema_10k, "8-K": schema_8k}
@@ -130,14 +133,6 @@ def create_union_schema(
         A JSON schema with all fields from all schemas. Fields that are
         required in ALL input schemas remain required, plus a required
         discriminator field. All other fields are optional.
-
-    Example:
-        >>> config = load_config()  # has extract-10k, extract-8k
-        >>> union = create_union_schema({
-        ...     "10-K": config["extract-10k"]["json_schema"],
-        ...     "8-K": config["extract-8k"]["json_schema"],
-        ... })
-        >>> UnionModel = get_extraction_schema(union)
     """
     # Check if any schema contains the discriminator field and warn if so
     schemas_with_discriminator = [
@@ -189,3 +184,58 @@ def create_union_schema(
         },
         "required": required_fields,
     }
+
+
+# =============================================================================
+# Example: Multi-Document-Type Workflows
+# =============================================================================
+#
+# For workflows with multiple extraction schemas (e.g., 10-K, 8-K, 10-Q),
+# define ResourceConfig type aliases and use them in a Resource function:
+#
+#   from typing import Annotated
+#   from workflows.resource import Resource, ResourceConfig
+#
+#   Extract10KConfig = Annotated[
+#       ExtractConfig,
+#       ResourceConfig(
+#           config_file="configs/config.json",
+#           path_selector="extract-10k",
+#           label="10-K Extraction",
+#           description="Extraction schema for annual reports",
+#       ),
+#   ]
+#
+#   Extract8KConfig = Annotated[
+#       ExtractConfig,
+#       ResourceConfig(
+#           config_file="configs/config.json",
+#           path_selector="extract-8k",
+#           label="8-K Extraction",
+#           description="Extraction schema for current reports",
+#       ),
+#   ]
+#
+#   async def get_union_presentation_schema(
+#       extract_10k: Extract10KConfig,
+#       extract_8k: Extract8KConfig,
+#   ) -> JsonSchema:
+#       """Create union presentation schema from all extraction configs."""
+#       union = create_union_schema({
+#           "10-K": extract_10k.json_schema,
+#           "8-K": extract_8k.json_schema,
+#       }, discriminator_field="filing_type")
+#       return JsonSchema.model_validate(union)
+#
+# Then use it in your metadata workflow:
+#
+#   @step
+#   async def get_metadata(
+#       self,
+#       _: StartEvent,
+#       schema: Annotated[JsonSchema, Resource(get_union_presentation_schema)],
+#   ) -> MetadataResponse:
+#       return MetadataResponse(
+#           json_schema=schema.to_dict(),
+#           extracted_data_collection=EXTRACTED_DATA_COLLECTION,
+#       )
