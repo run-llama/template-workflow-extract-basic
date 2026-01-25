@@ -13,10 +13,10 @@ from llama_cloud.types.file_query_params import Filter
 from pydantic import BaseModel
 from workflows import Context, Workflow, step
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.resource import Resource
+from workflows.resource import Resource, ResourceConfig
 
 from .clients import agent_name, get_llama_cloud_client, project_id
-from .config import EXTRACT_CONFIG, EXTRACTED_DATA_COLLECTION, ExtractionSchema
+from .config import EXTRACTED_DATA_COLLECTION, ExtractConfig, get_extraction_schema
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,8 @@ class ExtractedEvent(Event):
 
 
 class ExtractedInvalidEvent(Event):
+    """Event for extraction results that failed validation."""
+
     data: ExtractedData[dict[str, Any]]
 
 
@@ -128,6 +130,15 @@ class ProcessFileWorkflow(Workflow):
         llama_cloud_client: Annotated[
             AsyncLlamaCloud, Resource(get_llama_cloud_client)
         ],
+        extract_config: Annotated[
+            ExtractConfig,
+            ResourceConfig(
+                config_file="configs/config.json",
+                path_selector="extract",
+                label="Extraction Settings",
+                description="Configuration for document extraction quality and features",
+            ),
+        ],
     ) -> ExtractJobStartedEvent:
         """Extract structured data fields from the document."""
         state = await ctx.store.get_state()
@@ -141,8 +152,8 @@ class ProcessFileWorkflow(Workflow):
         )
 
         extract_job = await llama_cloud_client.extraction.run(
-            config=EXTRACT_CONFIG,
-            data_schema=ExtractionSchema.model_json_schema(),
+            config=extract_config.settings.model_dump(),
+            data_schema=extract_config.json_schema,
             file_id=state.file_id,
             project_id=project_id,
         )
@@ -177,7 +188,17 @@ class ProcessFileWorkflow(Workflow):
         llama_cloud_client: Annotated[
             AsyncLlamaCloud, Resource(get_llama_cloud_client)
         ],
+        extract_config: Annotated[
+            ExtractConfig,
+            ResourceConfig(
+                config_file="configs/config.json",
+                path_selector="extract",
+                label="Extraction Settings",
+                description="Configuration for document extraction quality and features",
+            ),
+        ],
     ) -> ExtractedEvent | ExtractedInvalidEvent:
+        """Process the completed extraction job and validate results."""
         state = await ctx.store.get_state()
         if state.extract_job_id is None:
             raise ValueError("Job ID cannot be null when getting its result")
@@ -189,10 +210,12 @@ class ProcessFileWorkflow(Workflow):
         )
         try:
             logger.info(f"Extracted data: {extracted_result}")
+            # Create dynamic Pydantic model from JSON schema
+            schema_class = get_extraction_schema(extract_config.json_schema)
+            # Use from_extraction_result for proper metadata extraction
             data = ExtractedData.from_extraction_result(
                 result=extract_run,
-                schema=ExtractionSchema,
-                # retain original file name and id, rather than using the extracted duplicate file
+                schema=schema_class,
                 file_name=state.filename,
                 file_id=state.file_id,
                 file_hash=state.file_hash,

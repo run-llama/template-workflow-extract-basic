@@ -1,44 +1,191 @@
 """
-For simple configuration of the extraction review application, just customize this file.
+Configuration for the extraction review application.
 
-If you need more control, feel free to edit the rest of the application
+Configuration is loaded from configs/config.json via ResourceConfig.
+The unified config contains both extraction settings and the JSON schema.
 """
 
-from __future__ import annotations
+import hashlib
+import json
+import logging
+from functools import lru_cache
+from typing import Any, Literal
 
-from llama_cloud.types.extraction.extract_config_param import ExtractConfigParam
-from pydantic import BaseModel, Field
+from json_schema_to_pydantic import create_model
+from pydantic import BaseModel
 
-# The name of the collection to use for storing extracted data. This will be qualified by the agent name.
-# When developing locally, this will use the _public collection (shared within the project), otherwise agent
-# data is isolated to each agent
+logger = logging.getLogger(__name__)
+
+
+# The name of the collection to use for storing extracted data.
+# When developing locally, this will use the _public collection (shared within the project),
+# otherwise agent data is isolated to each agent.
 EXTRACTED_DATA_COLLECTION: str = "extraction-review"
 
 
-# Modify this to match the fields you want extracted.
-# - Use comments as prompts for the extraction agent.
-# - Make fields optional or specify via a comment to provide a default value when the document may not contain
-# the information.
-# - Sub objects may be provided via sub-classes of BaseModel. Note that dicts are not supported: all available
-#   fields must be defined
-class ExtractionSchema(BaseModel):
-    document_type: str = Field(
-        description="An overarching category for the type of document (e.g. invoice, purchase order, etc.)"
-    )
-    summary: str = Field(
-        description="A 2-3 sentence summary describing the content of the document"
-    )
-    key_points: list[str] = Field(
-        description="A list of key points or insights from the document"
-    )
+class ExtractSettings(BaseModel):
+    """Extraction settings loaded from configs/config.json extract.settings."""
+
+    extraction_mode: Literal["FAST", "PREMIUM", "MULTIMODAL"]
+    system_prompt: str | None = None
+    citation_bbox: bool = False
+    use_reasoning: bool = False
+    cite_sources: bool = False
+    confidence_scores: bool = False
 
 
-EXTRACT_CONFIG = ExtractConfigParam(
-    extraction_mode="PREMIUM",
-    system_prompt=None,
-    # advanced. Only compatible with Premium mode.
-    citation_bbox=True,
-    use_reasoning=False,
-    cite_sources=True,
-    confidence_scores=True,
-)
+class ExtractConfig(BaseModel):
+    """Full extraction configuration with schema and settings."""
+
+    json_schema: dict[str, Any]
+    settings: ExtractSettings
+
+
+class SplitCategory(BaseModel):
+    """A category for document splitting."""
+
+    name: str
+    description: str
+
+
+class SplitSettings(BaseModel):
+    """Settings for document splitting."""
+
+    pass
+
+
+class SplitConfig(BaseModel):
+    """Split configuration with categories and settings."""
+
+    categories: list[SplitCategory] = []
+    settings: SplitSettings = SplitSettings()
+
+
+class JsonSchema(BaseModel):
+    """Pydantic wrapper for a JSON schema loaded via ResourceConfig."""
+
+    type: str = "object"
+    properties: dict[str, Any] = {}
+    required: list[str] = []
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to a plain dict for APIs that expect JSON schema."""
+        return self.model_dump(exclude_none=True)
+
+
+class Config(BaseModel):
+    """Root configuration model for configs/config.json."""
+
+    extract: ExtractConfig
+    split: SplitConfig = SplitConfig()
+
+
+def _hash_schema(json_schema: dict[str, Any]) -> str:
+    """Create a stable hash of a JSON schema for caching."""
+    schema_str = json.dumps(json_schema, sort_keys=True)
+    return hashlib.sha256(schema_str.encode()).hexdigest()
+
+
+@lru_cache(maxsize=16)
+def _get_cached_model(schema_hash: str, schema_json: str) -> type[BaseModel]:
+    """Get or create a Pydantic model from a JSON schema, cached by hash."""
+    schema = json.loads(schema_json)
+    return create_model(schema)
+
+
+def get_extraction_schema(json_schema: dict[str, Any]) -> type[BaseModel]:
+    """Convert a JSON schema dict to a Pydantic model class.
+
+    Results are cached by schema hash for efficiency.
+
+    Args:
+        json_schema: A JSON Schema object describing the extraction fields.
+
+    Returns:
+        A Pydantic model class that validates against the schema.
+    """
+    schema_hash = _hash_schema(json_schema)
+    # lru_cache requires hashable args, so we serialize the schema
+    schema_json = json.dumps(json_schema, sort_keys=True)
+    return _get_cached_model(schema_hash, schema_json)
+
+
+def create_union_schema(
+    schemas: dict[str, dict[str, Any]],
+    discriminator_field: str = "document_type",
+) -> dict[str, Any]:
+    """Create a union JSON schema from multiple extraction schemas.
+
+    Use this when you have multiple document types (e.g., 10-K, 8-K) and want
+    a single presentation schema that can hold any of them. This keeps fields
+    flat (preserving field_metadata for citations) while adding a discriminator.
+
+    Args:
+        schemas: Map of document type names to their JSON schemas.
+            E.g., {"10-K": schema_10k, "8-K": schema_8k}
+        discriminator_field: Name of the field to add for document type.
+            Defaults to "document_type".
+
+    Returns:
+        A JSON schema with all fields from all schemas. Fields that are
+        required in ALL input schemas remain required, plus a required
+        discriminator field. All other fields are optional.
+
+    Example:
+        >>> config = load_config()  # has extract-10k, extract-8k
+        >>> union = create_union_schema({
+        ...     "10-K": config["extract-10k"]["json_schema"],
+        ...     "8-K": config["extract-8k"]["json_schema"],
+        ... })
+        >>> UnionModel = get_extraction_schema(union)
+    """
+    # Check if any schema contains the discriminator field and warn if so
+    schemas_with_discriminator = [
+        name
+        for name, schema in schemas.items()
+        if discriminator_field in schema.get("properties", {})
+    ]
+    if schemas_with_discriminator:
+        logger.warning(
+            f"Discriminator field '{discriminator_field}' found in schemas: "
+            f"{', '.join(schemas_with_discriminator)}. "
+            f"It will be ignored and replaced with the union discriminator."
+        )
+
+    # Collect all properties from all schemas, excluding the discriminator field
+    all_properties: dict[str, Any] = {}
+    for schema in schemas.values():
+        for prop_name, prop_def in schema.get("properties", {}).items():
+            if prop_name == discriminator_field:
+                # Skip the discriminator field if it exists in input schemas
+                continue
+            if prop_name not in all_properties:
+                all_properties[prop_name] = prop_def
+
+    # Find fields that are required in ALL schemas (shallow check)
+    schema_list = list(schemas.values())
+    common_required: set[str] = set()
+    if schema_list:
+        # Start with required fields from the first schema
+        common_required = set(schema_list[0].get("required", []))
+        # Intersect with required fields from all other schemas
+        for schema in schema_list[1:]:
+            common_required &= set(schema.get("required", []))
+
+    # Remove discriminator from common_required if it was there
+    common_required.discard(discriminator_field)
+
+    # Build union schema - discriminator required, plus fields required in all schemas
+    required_fields = [discriminator_field] + sorted(common_required)
+    return {
+        "type": "object",
+        "properties": {
+            discriminator_field: {
+                "type": "string",
+                "enum": list(schemas.keys()),
+                "description": "Type of document that was extracted",
+            },
+            **all_properties,
+        },
+        "required": required_fields,
+    }
