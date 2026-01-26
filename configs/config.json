@@ -13,7 +13,7 @@
         },
         "key_points": {
           "type": "array",
-          "items": {"type": "string"},
+          "items": { "type": "string" },
           "description": "A list of key points or insights from the document"
         }
       },
@@ -30,6 +30,10 @@
   },
   "split": {
     "categories": [],
+    "settings": {}
+  },
+  "classify": {
+    "rules": [],
     "settings": {}
   }
 }

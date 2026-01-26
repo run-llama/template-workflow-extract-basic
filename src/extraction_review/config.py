@@ -12,7 +12,7 @@ from functools import lru_cache
 from typing import Any, Literal
 
 from json_schema_to_pydantic import create_model
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,35 @@ class SplitConfig(BaseModel):
     settings: SplitSettings = SplitSettings()
 
 
+class ClassifyRule(BaseModel):
+    """Classify rule, with type (rule target) and description (rule description)"""
+
+    type: str
+    description: str
+
+
+class ClassifyParsingConfig(BaseModel):
+    """Parsing config for Classify"""
+
+    lang: str = Field(description="two-letter ISO 639 language code", default="en")
+    max_pages: int | None = None
+    target_pages: list[int] | None = None
+
+
+class ClassifySettings(BaseModel):
+    """Extra settings for Classify"""
+
+    mode: Literal["FAST", "MULTIMODAL"] = "FAST"
+    parsing_config: ClassifyParsingConfig = ClassifyParsingConfig()
+
+
+class ClassifyConfig(BaseModel):
+    """Classify configuration, with rules and settings"""
+
+    rules: list[ClassifyRule] = []
+    settings: ClassifySettings = ClassifySettings()
+
+
 class JsonSchema(BaseModel):
     """Pydantic wrapper for a JSON schema loaded via ResourceConfig."""
 
@@ -78,6 +107,7 @@ class Config(BaseModel):
 
     extract: ExtractConfig
     split: SplitConfig = SplitConfig()
+    classify: ClassifyConfig = ClassifyConfig()
 
 
 def _hash_schema(json_schema: dict[str, Any]) -> str:
