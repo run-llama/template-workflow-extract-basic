@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 import httpx
 import respx
 from llama_cloud.types import File as CloudFile
+from llama_cloud.types.file_list_response import FileListResponse
 from llama_cloud.types.file_query_response import FileQueryResponse, Item
 from llama_cloud.types.presigned_url import PresignedURL
 
@@ -105,6 +106,9 @@ class FakeFilesNamespace:
         body = json_body or {"detail": "upload rejected by fake server"}
         self._upload_stubs.append((matcher, status_code, body, once))
 
+    def all_files(self) -> Dict[str, StoredFile]:
+        return dict(self._files)
+
     # Route registration ---------------------------------------------
     def register(self) -> None:
         server = self._server
@@ -116,6 +120,14 @@ class FakeFilesNamespace:
             alias="upload",
         )
         self.routes["upload"] = upload_route
+        list_route = server.add_route(
+            "GET",
+            "/api/v1/beta/files",
+            self._handle_list,
+            namespace="files",
+            alias="list_files",
+        )
+        self.routes["list"] = list_route
         get_route = server.add_route(
             "GET",
             "/api/v1/beta/files/{file_id}/content",
@@ -164,6 +176,43 @@ class FakeFilesNamespace:
         )
         self._files[file_id] = stored
         return self._server.json_response(stored.file.model_dump())
+
+    def _handle_list(self, request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        file_ids_raw = params.multi_items()
+        file_ids_filter = [v for k, v in file_ids_raw if k == "file_ids"]
+        file_name = params.get("file_name")
+        external_file_id = params.get("external_file_id")
+        page_size = int(params.get("page_size", "50"))
+
+        files = list(self._files.values())
+        if file_ids_filter:
+            files = [f for f in files if f.file.id in file_ids_filter]
+        if file_name:
+            files = [f for f in files if f.file.name == file_name]
+        if external_file_id:
+            files = [f for f in files if f.file.external_file_id == external_file_id]
+
+        files = files[:page_size]
+        items = [
+            FileListResponse(
+                id=f.file.id,
+                name=f.file.name,
+                project_id=f.file.project_id,
+                expires_at=f.file.expires_at,
+                external_file_id=f.file.external_file_id,
+                file_type=f.file.file_type,
+                last_modified_at=f.file.last_modified_at,
+                purpose=f.file.purpose,
+            )
+            for f in files
+        ]
+        return self._server.json_response(
+            {
+                "items": [item.model_dump() for item in items],
+                "next_page_token": None,
+            }
+        )
 
     def _handle_delete(self, request: httpx.Request) -> httpx.Response:
         file_id = request.url.path.split("/")[-1]

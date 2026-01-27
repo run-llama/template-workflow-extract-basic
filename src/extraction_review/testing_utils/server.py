@@ -13,6 +13,8 @@ from .classify import FakeClassifyNamespace
 from .extract import FakeExtractNamespace
 from .files import FakeFilesNamespace
 from .parse import FakeParseNamespace
+from .pipelines import FakePipelinesNamespace
+from .sheets import FakeSheetsNamespace
 from .split import FakeSplitNamespace
 
 Handler = Callable[[httpx.Request], httpx.Response]
@@ -42,6 +44,8 @@ class FakeLlamaCloudServer:
             "classify",
             "agent_data",
             "split",
+            "sheets",
+            "pipelines",
         )
         self._namespace_names = {name.lower() for name in selected}
         self._upload_base_url = upload_base_url or self.DEFAULT_UPLOAD_BASE
@@ -63,6 +67,12 @@ class FakeLlamaCloudServer:
         self.classify = FakeClassifyNamespace(server=self, files=self.files)
         self.agent_data = FakeAgentDataNamespace(server=self)
         self.split = FakeSplitNamespace(server=self)
+        self.pipelines = FakePipelinesNamespace(server=self)
+        self.sheets = FakeSheetsNamespace(
+            server=self,
+            files=self.files,
+            download_base_url=self._download_base_url,
+        )
 
     # Context management ----------------------------------------------
     def install(self) -> "FakeLlamaCloudServer":
@@ -181,6 +191,10 @@ class FakeLlamaCloudServer:
             self.agent_data.register()
         if "split" in self._namespace_names:
             self.split.register()
+        if "pipelines" in self._namespace_names:
+            self.pipelines.register()
+        if "sheets" in self._namespace_names:
+            self.sheets.register()
         self._registered = True
 
 

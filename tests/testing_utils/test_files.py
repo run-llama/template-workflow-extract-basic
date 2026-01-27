@@ -115,3 +115,48 @@ async def test_files_query_by_id(server, tmp_path):
     assert len(response.items) == 1
     assert response.total_size == 1
     assert response.items[0].id == file_obj_1.id
+
+
+@pytest.mark.asyncio
+async def test_files_list(server, tmp_path):
+    """Test that you can list files using the GET /files endpoint."""
+    test_file_1 = tmp_path / "file_a.txt"
+    test_file_1.write_bytes(b"content a")
+    test_file_2 = tmp_path / "file_b.txt"
+    test_file_2.write_bytes(b"content b")
+
+    client = AsyncLlamaCloud(api_key="fake-api-key")
+    file_obj_1 = await client.files.create(
+        file=test_file_1,
+        purpose="extract",
+    )
+    file_obj_2 = await client.files.create(
+        file=test_file_2,
+        purpose="extract",
+    )
+
+    # List all files
+    all_files = await client.files.list()
+    items = [f async for f in all_files]
+    assert len(items) >= 2
+    ids = {f.id for f in items}
+    assert file_obj_1.id in ids
+    assert file_obj_2.id in ids
+
+
+@pytest.mark.asyncio
+async def test_files_list_by_name(server, tmp_path):
+    """Test filtering files by name via the list endpoint."""
+    test_file = tmp_path / "unique_name.pdf"
+    test_file.write_bytes(b"unique content")
+
+    # Use preload for reliable filename storage
+    server.files.preload(path=test_file, filename="unique_name.pdf")
+    server.files.preload_from_source("other_file.txt", b"other content")
+
+    client = AsyncLlamaCloud(api_key="fake-api-key")
+
+    results = await client.files.list(file_name="unique_name.pdf")
+    items = [f async for f in results]
+    assert len(items) == 1
+    assert items[0].name == "unique_name.pdf"
