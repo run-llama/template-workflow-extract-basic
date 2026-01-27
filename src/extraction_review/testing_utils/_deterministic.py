@@ -197,3 +197,19 @@ def _generate_value(schema: Any, rng: random.Random, depth: int) -> Any:
             return _generate_value(option, rng, depth + 1)
 
     return generate_text_blob(rng.randint(0, 1_000_000), sentences=1)
+
+
+def categorize_pages(
+    content: bytes, categories: list[str], seed: int
+) -> dict[str, list[int]]:
+    rng = random.Random(seed)
+    page_size = rng.randint(1, 50)
+    categorized_pages: dict[str, list[int]] = {c: [] for c in categories}
+    i = 0
+    j = 0
+    while j + page_size < len(content):
+        i += 1
+        category = rng.choice(categories)
+        categorized_pages[category].append(i)
+        j += page_size
+    return categorized_pages

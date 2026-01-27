@@ -48,10 +48,16 @@ class SplitCategory(BaseModel):
     description: str
 
 
+class SplittingStrategy(BaseModel):
+    """Strategy for document splitting"""
+
+    allow_uncategorized: bool = False
+
+
 class SplitSettings(BaseModel):
     """Settings for document splitting."""
 
-    pass
+    splitting_strategy: SplittingStrategy = SplittingStrategy()
 
 
 class SplitConfig(BaseModel):

@@ -8,11 +8,12 @@ from typing import Any, Callable, Dict, Optional, Sequence
 import httpx
 import respx
 
+from .agent_data import FakeAgentDataNamespace
 from .classify import FakeClassifyNamespace
 from .extract import FakeExtractNamespace
 from .files import FakeFilesNamespace
 from .parse import FakeParseNamespace
-from .agent_data import FakeAgentDataNamespace
+from .split import FakeSplitNamespace
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -31,14 +32,23 @@ class FakeLlamaCloudServer:
         download_base_url: Optional[str] = None,
         default_project_id: str = "proj-test",
         default_organization_id: str = "org-test",
+        default_user_id: str = "user-test",
     ) -> None:
         self.base_urls = tuple(base_urls or (self.DEFAULT_BASE_URL,))
-        selected = namespaces or ("files", "extract", "parse", "classify", "agent_data")
+        selected = namespaces or (
+            "files",
+            "extract",
+            "parse",
+            "classify",
+            "agent_data",
+            "split",
+        )
         self._namespace_names = {name.lower() for name in selected}
         self._upload_base_url = upload_base_url or self.DEFAULT_UPLOAD_BASE
         self._download_base_url = download_base_url or self.DEFAULT_DOWNLOAD_BASE
         self.default_project_id = default_project_id
         self.default_organization_id = default_organization_id
+        self.default_user_id = default_user_id
         self.router = respx.MockRouter(assert_all_called=False)
         self._installed = False
         self._registered = False
@@ -52,6 +62,7 @@ class FakeLlamaCloudServer:
         self.parse = FakeParseNamespace(server=self)
         self.classify = FakeClassifyNamespace(server=self, files=self.files)
         self.agent_data = FakeAgentDataNamespace(server=self)
+        self.split = FakeSplitNamespace(server=self)
 
     # Context management ----------------------------------------------
     def install(self) -> "FakeLlamaCloudServer":
@@ -168,6 +179,8 @@ class FakeLlamaCloudServer:
             self.classify.register()
         if "agent_data" in self._namespace_names:
             self.agent_data.register()
+        if "split" in self._namespace_names:
+            self.split.register()
         self._registered = True
 
 
