@@ -139,6 +139,14 @@ def _generate_value(schema: Any, rng: random.Random, depth: int) -> Any:
 
         schema_type = schema.get("type")
 
+        # Handle union types like ["number", "null"]
+        if isinstance(schema_type, list):
+            concrete_types = [t for t in schema_type if t != "null"]
+            if concrete_types:
+                schema_type = concrete_types[0]
+            else:
+                return None
+
         if schema_type == "object":
             properties = schema.get("properties", {})
             result = {}
