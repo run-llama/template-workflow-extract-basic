@@ -5,6 +5,7 @@ import {
   FilePreview,
   useItemData,
   type Highlight,
+  type ExtractedData,
   Button,
 } from "@llamaindex/ui";
 import { Clock, XCircle, Download } from "lucide-react";
@@ -79,7 +80,10 @@ export default function ItemPage() {
 
   // Update breadcrumb when item data loads
   useEffect(() => {
-    const fileName = itemHookData.item?.data?.file_name;
+    const extractedData = itemHookData.item?.data as
+      | ExtractedData<unknown>
+      | undefined;
+    const fileName = extractedData?.file_name;
     if (fileName) {
       setBreadcrumbs([
         { label: APP_TITLE, href: "/" },
@@ -94,7 +98,7 @@ export default function ItemPage() {
       // Reset to default breadcrumb when leaving the page
       setBreadcrumbs([{ label: APP_TITLE, href: "/" }]);
     };
-  }, [itemHookData.item?.data?.file_name, setBreadcrumbs]);
+  }, [itemHookData.item?.data, setBreadcrumbs]);
 
   useEffect(() => {
     setButtons(() => [
@@ -108,10 +112,9 @@ export default function ItemPage() {
             }
           }}
           disabled={!itemData}
-        >
-          <Download className="h-4 w-4 mr-2" />
-          Export JSON
-        </Button>
+          startIcon={<Download className="h-4 w-4" />}
+          label="Export JSON"
+        />
         <AcceptReject<any>
           itemData={itemHookData}
           onComplete={() => navigate("/")}
@@ -154,13 +157,17 @@ export default function ItemPage() {
     );
   }
 
+  // Cast itemData.data to ExtractedData for proper typing
+  const extractedData = itemData.data as ExtractedData<any>;
+  const fileId = extractedData.file_id;
+
   return (
     <div className="flex h-full bg-gray-50">
       {/* Left Side - File Preview */}
       <div className="w-1/2 border-r h-full border-gray-200 bg-white">
-        {itemData.data.file_id && (
+        {fileId && (
           <FilePreview
-            fileId={itemData.data.file_id}
+            fileId={fileId}
             onBoundingBoxClick={(box, pageNumber) => {
               console.log("Bounding box clicked:", box, "on page:", pageNumber);
             }}
@@ -174,7 +181,7 @@ export default function ItemPage() {
         <div className="p-4 space-y-4">
           {/* Extracted Data */}
           <ExtractedDataDisplay<any>
-            extractedData={itemData.data}
+            extractedData={extractedData}
             title="Extracted Data"
             onChange={(updatedData) => {
               updateData(updatedData);

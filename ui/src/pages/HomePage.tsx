@@ -3,8 +3,8 @@ import {
   WorkflowTrigger,
   ExtractedDataItemGrid,
   HandlerState,
+  AgentDataItem,
 } from "@llamaindex/ui";
-import type { TypedAgentData } from "llama-cloud-services/beta/agent";
 import styles from "./HomePage.module.css";
 import { useNavigate } from "react-router-dom";
 import { useState } from "react";
@@ -16,7 +16,7 @@ export default function HomePage() {
 
 function TaskList() {
   const navigate = useNavigate();
-  const goToItem = (item: TypedAgentData) => {
+  const goToItem = (item: AgentDataItem) => {
     navigate(`/item/${item.id}`);
   };
   const [reloadSignal, setReloadSignal] = useState(0);
