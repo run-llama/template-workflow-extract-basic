@@ -38,8 +38,10 @@ function selectSchemaForItem(
     return json_schema;
   }
 
-  // Get the discriminator value from the item data
-  const discriminatorValue = itemData?.data?.[discriminator_field];
+  // Get the discriminator value from the extracted data
+  // item.data contains wrapper fields (status, file_id, etc.)
+  // item.data.data contains the actual extracted fields including the discriminator
+  const discriminatorValue = itemData?.data?.data?.[discriminator_field];
 
   // If we have a valid discriminator value and a matching schema, use it
   if (discriminatorValue && schemas[discriminatorValue]) {
