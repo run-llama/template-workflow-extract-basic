@@ -98,6 +98,27 @@ class ClassifyConfig(BaseModel):
     settings: ClassifySettings = ClassifySettings()
 
 
+class ParseSettings(BaseModel):
+    """Parsing settings for LlamaParse.
+
+    See LlamaParse documentation for full options:
+    /python/cloud/llamaparse/api-v2-guide/
+    """
+
+    tier: Literal["fast", "agentic"] = "agentic"
+    version: str = "latest"
+    lang: str | None = Field(
+        default=None, description="Two-letter ISO 639 language code"
+    )
+    max_pages: int | None = None
+
+
+class ParseConfig(BaseModel):
+    """Parse configuration for LlamaParse."""
+
+    settings: ParseSettings = ParseSettings()
+
+
 class JsonSchema(BaseModel):
     """Pydantic wrapper for a JSON schema loaded via ResourceConfig."""
 
@@ -116,6 +137,7 @@ class Config(BaseModel):
     extract: ExtractConfig
     split: SplitConfig = SplitConfig()
     classify: ClassifyConfig = ClassifyConfig()
+    parse: ParseConfig = ParseConfig()
 
 
 def _hash_schema(json_schema: dict[str, Any]) -> str:

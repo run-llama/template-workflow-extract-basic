@@ -35,5 +35,11 @@
   "classify": {
     "rules": [],
     "settings": {}
+  },
+  "parse": {
+    "settings": {
+      "tier": "agentic",
+      "version": "latest"
+    }
   }
 }
