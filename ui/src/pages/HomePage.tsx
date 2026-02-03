@@ -52,9 +52,11 @@ function TaskList() {
           />
           <WorkflowTrigger
             workflowName="process-file"
+            contentHash={{ enabled: true }}
             customWorkflowInput={(files) => {
               return {
                 file_id: files[0].fileId,
+                file_hash: files[0].contentHash ?? null,
               };
             }}
             onSuccess={(handler) => {

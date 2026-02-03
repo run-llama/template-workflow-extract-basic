@@ -1,12 +1,7 @@
 import asyncio
-import hashlib
 import logging
-import os
-import tempfile
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
-import httpx
 from llama_cloud import AsyncLlamaCloud
 from llama_cloud.types.beta.extracted_data import ExtractedData, InvalidExtractionData
 from llama_cloud.types.file_query_params import Filter
@@ -23,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 class FileEvent(StartEvent):
     file_id: str
+    file_hash: str | None = None
 
 
 class Status(Event):
@@ -46,7 +42,6 @@ class ExtractedInvalidEvent(Event):
 
 class ExtractionState(BaseModel):
     file_id: str | None = None
-    file_path: str | None = None
     filename: str | None = None
     file_hash: str | None = None
     extract_job_id: str | None = None
@@ -73,44 +68,28 @@ class ProcessFileWorkflow(Workflow):
             ),
         ],
     ) -> ExtractJobStartedEvent:
-        """Download document and start extraction job."""
+        """Start extraction job for the document."""
         file_id = event.file_id
         logger.info(f"Running file {file_id}")
 
-        # Download file from cloud storage
+        # Get file metadata
         try:
             files = await llama_cloud_client.files.query(
                 filter=Filter(file_ids=[file_id])
             )
             file_metadata = files.items[0]
-            file_url = await llama_cloud_client.files.get(file_id=file_id)
-
-            temp_dir = tempfile.gettempdir()
             filename = file_metadata.name
-            file_path = os.path.join(temp_dir, filename)
-            client = httpx.AsyncClient()
-            # Report progress to the UI
-            logger.info(f"Downloading file {file_url.url} to {file_path}")
-
-            async with client.stream("GET", file_url.url) as response:
-                with open(file_path, "wb") as f:
-                    async for chunk in response.aiter_bytes():
-                        f.write(chunk)
-            logger.info(f"Downloaded file {file_url.url} to {file_path}")
-
         except Exception as e:
-            logger.error(f"Error downloading file {file_id}: {e}", exc_info=True)
+            logger.error(f"Error fetching file metadata {file_id}: {e}", exc_info=True)
             ctx.write_event_to_stream(
                 Status(
                     level="error",
-                    message=f"Error downloading file {file_id}: {e}",
+                    message=f"Error fetching file metadata {file_id}: {e}",
                 )
             )
             raise e
 
         # Start extraction job
-        # track the content of the file, so as to be able to de-duplicate
-        file_content = Path(file_path).read_bytes()
         logger.info(f"Extracting data from file {filename}")
         ctx.write_event_to_stream(
             Status(level="info", message=f"Extracting data from file {filename}")
@@ -123,12 +102,15 @@ class ProcessFileWorkflow(Workflow):
             project_id=project_id,
         )
 
+        # Use file_hash from the event (computed by UI from file content)
+        # or fall back to external_file_id from file metadata for deduplication
+        file_hash = event.file_hash or file_metadata.external_file_id
+
         # Save state (mutation at end of step)
         async with ctx.store.edit_state() as state:
             state.file_id = file_id
-            state.file_path = file_path
             state.filename = filename
-            state.file_hash = hashlib.sha256(file_content).hexdigest()
+            state.file_hash = file_hash
             state.extract_job_id = extract_job.id
 
         return ExtractJobStartedEvent()
@@ -241,6 +223,8 @@ class ProcessFileWorkflow(Workflow):
 workflow = ProcessFileWorkflow(timeout=None)
 
 if __name__ == "__main__":
+    from pathlib import Path
+
     from dotenv import load_dotenv
 
     load_dotenv()
