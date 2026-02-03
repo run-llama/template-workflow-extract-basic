@@ -9,10 +9,11 @@ from .config import EXTRACTED_DATA_COLLECTION, JsonSchema
 
 
 class MetadataResponse(StopEvent):
-    # Given a JSON _object_ schema, the UI will dynamically generate (editable) form
-    # rendering the extracted data
     json_schema: dict[str, Any]
     extracted_data_collection: str
+    # For multi-schema workflows: individual schemas by document type
+    schemas: dict[str, dict[str, Any]] | None = None
+    discriminator_field: str | None = None
 
 
 class MetadataWorkflow(Workflow):
