@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 from typing import Annotated, Any, Literal
 
@@ -154,7 +155,9 @@ class ProcessFileWorkflow(Workflow):
         # Validate and parse extraction result
         extracted_event: ExtractedEvent | ExtractedInvalidEvent
         try:
-            logger.info(f"Extracted data: {extracted_result}")
+            logger.info(
+                f"Extracted data: {json.dumps(extracted_result.model_dump(), indent=2)}"
+            )
             # Create dynamic Pydantic model from JSON schema
             schema_class = get_extraction_schema(extract_config.json_schema)
             # Use from_extraction_result for proper metadata extraction
@@ -188,9 +191,9 @@ class ProcessFileWorkflow(Workflow):
         # Save extracted data for review
         extracted_data = extracted_event.data
         data_dict = extracted_data.model_dump()
-        # remove past data when reprocessing the same file
+        # Remove past data when reprocessing the same file
         if extracted_data.file_hash is not None:
-            await llama_cloud_client.beta.agent_data.delete_by_query(
+            delete_result = await llama_cloud_client.beta.agent_data.delete_by_query(
                 deployment_name=agent_name or "_public",
                 collection=EXTRACTED_DATA_COLLECTION,
                 filter={
@@ -199,9 +202,11 @@ class ProcessFileWorkflow(Workflow):
                     },
                 },
             )
-        logger.info(
-            f"Removing past data for file {extracted_data.file_name} with hash {extracted_data.file_hash}"
-        )
+            if delete_result.deleted_count > 0:
+                logger.info(
+                    f"Removed {delete_result.deleted_count} existing record(s) "
+                    f"for file {extracted_data.file_name}"
+                )
         # finally, save the new data
         item = await llama_cloud_client.beta.agent_data.agent_data(
             data=data_dict,

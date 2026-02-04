@@ -5,16 +5,13 @@ Configuration is loaded from configs/config.json via ResourceConfig.
 The unified config contains both extraction settings and the JSON schema.
 """
 
-import hashlib
-import json
 import logging
-from functools import lru_cache
 from typing import Any, Literal
 
-from json_schema_to_pydantic import create_model
 from pydantic import BaseModel, Field
 
 from .json_util import create_union_schema as create_union_schema
+from .json_util import get_extraction_schema as get_extraction_schema
 
 logger = logging.getLogger(__name__)
 
@@ -138,33 +135,3 @@ class Config(BaseModel):
     split: SplitConfig = SplitConfig()
     classify: ClassifyConfig = ClassifyConfig()
     parse: ParseConfig = ParseConfig()
-
-
-def _hash_schema(json_schema: dict[str, Any]) -> str:
-    """Create a stable hash of a JSON schema for caching."""
-    schema_str = json.dumps(json_schema, sort_keys=True)
-    return hashlib.sha256(schema_str.encode()).hexdigest()
-
-
-@lru_cache(maxsize=16)
-def _get_cached_model(schema_hash: str, schema_json: str) -> type[BaseModel]:
-    """Get or create a Pydantic model from a JSON schema, cached by hash."""
-    schema = json.loads(schema_json)
-    return create_model(schema)
-
-
-def get_extraction_schema(json_schema: dict[str, Any]) -> type[BaseModel]:
-    """Convert a JSON schema dict to a Pydantic model class.
-
-    Results are cached by schema hash for efficiency.
-
-    Args:
-        json_schema: A JSON Schema object describing the extraction fields.
-
-    Returns:
-        A Pydantic model class that validates against the schema.
-    """
-    schema_hash = _hash_schema(json_schema)
-    # lru_cache requires hashable args, so we serialize the schema
-    schema_json = json.dumps(json_schema, sort_keys=True)
-    return _get_cached_model(schema_hash, schema_json)
