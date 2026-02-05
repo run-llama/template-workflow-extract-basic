@@ -11,7 +11,7 @@ from llama_cloud.types.parsing_get_response import (
     Items,
     ItemsPage,
     ItemsPageStructuredResultPage,
-    ItemsPageStructuredResultPageItemTextItem,
+    TextItem,
     Job,
     Markdown,
     MarkdownPage,
@@ -72,11 +72,7 @@ class FakeParseNamespace:
         page_text = generate_text_blob(seed, sentences=3)
         item_pages: list[ItemsPage] = [
             ItemsPageStructuredResultPage(
-                items=[
-                    ItemsPageStructuredResultPageItemTextItem(
-                        md=page_text, value=page_text, bBox=None, type="text"
-                    )
-                ],
+                items=[TextItem(md=page_text, value=page_text, bBox=None, type="text")],
                 page_height=1,
                 page_number=1,
                 page_width=1,
@@ -155,11 +151,7 @@ class FakeParseNamespace:
         page_text = generate_text_blob(seed, sentences=3)
         item_pages: list[ItemsPage] = [
             ItemsPageStructuredResultPage(
-                items=[
-                    ItemsPageStructuredResultPageItemTextItem(
-                        md=page_text, value=page_text, bBox=None, type="text"
-                    )
-                ],
+                items=[TextItem(md=page_text, value=page_text, bBox=None, type="text")],
                 page_height=1,
                 page_number=1,
                 page_width=1,
