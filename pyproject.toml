@@ -58,4 +58,3 @@ metadata = "extraction_review.metadata_workflow:workflow"
 
 [tool.llamadeploy.ui]
 directory = "ui"
-

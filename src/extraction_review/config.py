@@ -38,6 +38,11 @@ class ExtractConfig(BaseModel):
 
     json_schema: dict[str, Any]
     settings: ExtractSettings
+    # Set this to a LlamaCloud extraction agent ID to use a remote agent's
+    # schema and settings instead of the local json_schema/settings above.
+    # When set, extraction uses extraction.jobs.extract(extraction_agent_id=...)
+    # and the local settings are ignored for extraction.
+    extraction_agent_id: str | None = None
 
 
 class SplitCategory(BaseModel):

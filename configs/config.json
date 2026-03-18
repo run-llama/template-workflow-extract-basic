@@ -1,5 +1,6 @@
 {
   "extract": {
+    "extraction_agent_id": null,
     "json_schema": {
       "type": "object",
       "properties": {

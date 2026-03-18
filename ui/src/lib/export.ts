@@ -1,8 +1,5 @@
 import type { AgentDataItem, ExtractedData } from "@llamaindex/ui";
 
-/**
- * Downloads data as a JSON file
- */
 export function downloadJSON<T>(
   data: T,
   filename: string = "extraction-results.json",
@@ -17,7 +14,6 @@ export function downloadJSON<T>(
   document.body.appendChild(link);
   link.click();
 
-  // Cleanup
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }

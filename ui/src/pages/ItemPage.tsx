@@ -58,9 +58,7 @@ export default function ItemPage() {
   const { setButtons, setBreadcrumbs } = useToolbar();
   const [highlight, setHighlight] = useState<Highlight | undefined>(undefined);
   const { metadata } = useMetadataContext();
-  // Use the hook to fetch item data
   const itemHookData = useItemData<any>({
-    // order/remove fields as needed here
     jsonSchema: modifyJsonSchema(metadata.json_schema, {}),
     itemId: itemId as string,
     isMock: false,
@@ -78,7 +76,6 @@ export default function ItemPage() {
 
   const navigate = useNavigate();
 
-  // Update breadcrumb when item data loads
   useEffect(() => {
     const extractedData = itemHookData.item?.data as
       | ExtractedData<unknown>
@@ -95,7 +92,6 @@ export default function ItemPage() {
     }
 
     return () => {
-      // Reset to default breadcrumb when leaving the page
       setBreadcrumbs([{ label: APP_TITLE, href: "/" }]);
     };
   }, [itemHookData.item?.data, setBreadcrumbs]);
@@ -163,7 +159,6 @@ export default function ItemPage() {
 
   return (
     <div className="flex h-full bg-gray-50">
-      {/* Left Side - File Preview */}
       <div className="w-1/2 border-r h-full border-gray-200 bg-white">
         {fileId && (
           <FilePreview
@@ -176,10 +171,8 @@ export default function ItemPage() {
         )}
       </div>
 
-      {/* Right Side - Review Panel */}
       <div className="flex-1 bg-white h-full overflow-y-auto">
         <div className="p-4 space-y-4">
-          {/* Extracted Data */}
           <ExtractedDataDisplay<any>
             extractedData={extractedData}
             title="Extracted Data"

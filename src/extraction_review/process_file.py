@@ -96,12 +96,18 @@ class ProcessFileWorkflow(Workflow):
             Status(level="info", message=f"Extracting data from file {filename}")
         )
 
-        extract_job = await llama_cloud_client.extraction.run(
-            config=extract_config.settings.model_dump(),
-            data_schema=extract_config.json_schema,
-            file_id=file_id,
-            project_id=project_id,
-        )
+        if extract_config.extraction_agent_id:
+            extract_job = await llama_cloud_client.extraction.jobs.extract(
+                extraction_agent_id=extract_config.extraction_agent_id,
+                file_id=file_id,
+            )
+        else:
+            extract_job = await llama_cloud_client.extraction.run(
+                config=extract_config.settings.model_dump(),
+                data_schema=extract_config.json_schema,
+                file_id=file_id,
+                project_id=project_id,
+            )
 
         # Use file_hash from the event (computed by UI from file content)
         # or fall back to external_file_id from file metadata for deduplication
@@ -159,7 +165,13 @@ class ProcessFileWorkflow(Workflow):
                 f"Extracted data: {json.dumps(extracted_result.model_dump(), indent=2)}"
             )
             # Create dynamic Pydantic model from JSON schema
-            schema_class = get_extraction_schema(extract_config.json_schema)
+            if extract_config.extraction_agent_id:
+                agent = await llama_cloud_client.extraction.extraction_agents.get(
+                    extract_config.extraction_agent_id
+                )
+                schema_class = get_extraction_schema(agent.data_schema)
+            else:
+                schema_class = get_extraction_schema(extract_config.json_schema)
             # Use from_extraction_result for proper metadata extraction
             data = ExtractedData.from_extraction_result(
                 result=extract_run,
@@ -174,8 +186,7 @@ class ProcessFileWorkflow(Workflow):
             extracted_event = ExtractedInvalidEvent(data=e.invalid_item)
         except Exception as e:
             logger.error(
-                f"Error extracting data from file {state.filename}: {e}",
-                exc_info=True,
+                f"Error extracting data from file {state.filename}: {e}", exc_info=True
             )
             ctx.write_event_to_stream(
                 Status(

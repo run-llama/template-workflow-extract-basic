@@ -5,7 +5,8 @@ from workflows import Workflow, step
 from workflows.events import StartEvent, StopEvent
 from workflows.resource import ResourceConfig
 
-from .config import EXTRACTED_DATA_COLLECTION, JsonSchema
+from .clients import get_llama_cloud_client
+from .config import EXTRACTED_DATA_COLLECTION, ExtractConfig, JsonSchema
 
 
 class MetadataResponse(StopEvent):
@@ -32,9 +33,31 @@ class MetadataWorkflow(Workflow):
                 description="JSON Schema defining the fields to extract from documents",
             ),
         ],
+        extract_config: Annotated[
+            ExtractConfig,
+            ResourceConfig(
+                config_file="configs/config.json",
+                path_selector="extract",
+                label="Extraction Settings",
+                description="Configuration for document extraction quality and features",
+            ),
+        ],
     ) -> MetadataResponse:
-        """Return the data schema and storage settings for the review interface."""
-        schema_dict = extraction_schema.to_dict()
+        """Return the data schema and storage settings for the review interface.
+
+        When extraction_agent_id is set, fetches the schema from the remote
+        agent so the UI always reflects what the agent will actually extract.
+        Otherwise uses the local schema from config.json.
+        """
+        if extract_config.extraction_agent_id:
+            client = get_llama_cloud_client()
+            agent = await client.extraction.extraction_agents.get(
+                extract_config.extraction_agent_id
+            )
+            schema_dict = agent.data_schema
+        else:
+            schema_dict = extraction_schema.to_dict()
+
         json_schema = jsonref.replace_refs(schema_dict, proxies=False)
         return MetadataResponse(
             json_schema=json_schema,
