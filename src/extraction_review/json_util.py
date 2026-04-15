@@ -36,7 +36,7 @@ def get_extraction_schema(
     Results are cached by schema hash for efficiency.
 
     Args:
-        json_schema: A JSON Schema object from config (e.g., `extract_config.json_schema`).
+        json_schema: A JSON Schema object from config (e.g., `extract_config.data_schema`).
         discriminator_field: For multi-schema workflows, the field name to identify
             document type (e.g., "document_type"). When set, adds this field with
             a default value so extraction results validate correctly.
@@ -49,11 +49,11 @@ def get_extraction_schema(
     Example:
         ```python
         # Single-schema workflow
-        schema_class = get_extraction_schema(extract_config.json_schema)
+        schema_class = get_extraction_schema(extract_config.data_schema)
 
         # Multi-schema workflow (adds discriminator with default value)
         schema_class = get_extraction_schema(
-            extract_config.json_schema,
+            extract_config.data_schema,
             discriminator_field="document_type",
             discriminator_value="invoice",
         )

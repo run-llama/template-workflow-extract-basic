@@ -48,15 +48,6 @@ class ExtractionState(BaseModel):
     extract_job_id: str | None = None
 
 
-def _build_inline_configuration(extract_config: ExtractConfig) -> dict[str, Any]:
-    """Build an inline v2 ExtractConfiguration param from local config."""
-    settings = extract_config.settings.model_dump(exclude_none=True)
-    return {
-        "data_schema": extract_config.json_schema,
-        **settings,
-    }
-
-
 class ProcessFileWorkflow(Workflow):
     """Extract structured data from a document and save it for review."""
 
@@ -116,7 +107,10 @@ class ProcessFileWorkflow(Workflow):
         else:
             extract_job = await llama_cloud_client.extract.create(
                 file_input=file_id,
-                configuration=_build_inline_configuration(extract_config),
+                configuration=extract_config.model_dump(
+                    exclude={"configuration_id", "product_type"},
+                    exclude_none=True,
+                ),
                 project_id=project_id,
             )
 
@@ -186,7 +180,7 @@ class ProcessFileWorkflow(Workflow):
                     )
                 schema_class = get_extraction_schema(dict(params.data_schema))
             else:
-                schema_class = get_extraction_schema(extract_config.json_schema)
+                schema_class = get_extraction_schema(dict(extract_config.data_schema))
 
             data = ExtractedData.from_extract_job(
                 job=job,

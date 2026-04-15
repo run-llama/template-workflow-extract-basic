@@ -35,7 +35,7 @@ def get_extraction_schema() -> dict:
     """Load the extraction schema from the unified config file."""
     config_path = Path(__file__).parent.parent / "configs" / "config.json"
     config = json.loads(config_path.read_text())
-    return config["extract"]["json_schema"]
+    return config["extract"]["data_schema"]
 
 
 @pytest.mark.asyncio

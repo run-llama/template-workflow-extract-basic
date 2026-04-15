@@ -7,7 +7,7 @@ from workflows.events import StartEvent, StopEvent
 from workflows.resource import ResourceConfig
 
 from .clients import get_llama_cloud_client, project_id
-from .config import EXTRACTED_DATA_COLLECTION, ExtractConfig, JsonSchema
+from .config import EXTRACTED_DATA_COLLECTION, ExtractConfig
 
 
 class MetadataResponse(StopEvent):
@@ -25,15 +25,6 @@ class MetadataWorkflow(Workflow):
     async def get_metadata(
         self,
         _: StartEvent,
-        extraction_schema: Annotated[
-            JsonSchema,
-            ResourceConfig(
-                config_file="configs/config.json",
-                path_selector="extract.json_schema",
-                label="Extraction Schema",
-                description="JSON Schema defining the fields to extract from documents",
-            ),
-        ],
         extract_config: Annotated[
             ExtractConfig,
             ResourceConfig(
@@ -63,7 +54,7 @@ class MetadataWorkflow(Workflow):
                 )
             schema_dict = dict(params.data_schema)
         else:
-            schema_dict = extraction_schema.to_dict()
+            schema_dict = dict(extract_config.data_schema)
 
         json_schema = jsonref.replace_refs(schema_dict, proxies=False)
         return MetadataResponse(
