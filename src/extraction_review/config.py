@@ -23,14 +23,22 @@ EXTRACTED_DATA_COLLECTION: str = "extraction-review"
 
 
 class ExtractSettings(BaseModel):
-    """Extraction settings loaded from configs/config.json extract.settings."""
+    """Extraction settings matching llama-cloud v2 ExtractConfiguration.
 
-    extraction_mode: Literal["FAST", "PREMIUM", "MULTIMODAL"]
+    See llama_cloud.types.extract_configuration.ExtractConfiguration.
+    """
+
+    tier: Literal["cost_effective", "agentic"] = "agentic"
+    extraction_target: Literal["per_doc", "per_page", "per_table_row"] = "per_doc"
     system_prompt: str | None = None
-    citation_bbox: bool = False
-    use_reasoning: bool = False
     cite_sources: bool = False
     confidence_scores: bool = False
+    extract_version: str | None = None
+    lang: str | None = None
+    max_pages: int | None = None
+    target_pages: str | None = None
+    parse_tier: str | None = None
+    parse_config_id: str | None = None
 
 
 class ExtractConfig(BaseModel):
@@ -38,11 +46,10 @@ class ExtractConfig(BaseModel):
 
     json_schema: dict[str, Any]
     settings: ExtractSettings
-    # Set this to a LlamaCloud extraction agent ID to use a remote agent's
-    # schema and settings instead of the local json_schema/settings above.
-    # When set, extraction uses extraction.jobs.extract(extraction_agent_id=...)
-    # and the local settings are ignored for extraction.
-    extraction_agent_id: str | None = None
+    # Set this to a saved LlamaCloud configuration id (cfg_...) to pull the
+    # schema and settings from the platform instead of the local values above.
+    # When set, extraction uses client.extract.run(configuration_id=...).
+    configuration_id: str | None = None
 
 
 class SplitCategory(BaseModel):
@@ -107,7 +114,7 @@ class ParseSettings(BaseModel):
     /python/cloud/llamaparse/api-v2-guide/
     """
 
-    tier: Literal["fast", "agentic"] = "agentic"
+    tier: Literal["fast", "cost_effective", "agentic", "agentic_plus"] = "agentic"
     version: str = "latest"
     lang: str | None = Field(
         default=None, description="Two-letter ISO 639 language code"

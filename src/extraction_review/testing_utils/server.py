@@ -10,6 +10,7 @@ import respx
 
 from .agent_data import FakeAgentDataNamespace
 from .classify import FakeClassifyNamespace
+from .configurations import FakeConfigurationsNamespace
 from .extract import FakeExtractNamespace
 from .files import FakeFilesNamespace
 from .parse import FakeParseNamespace
@@ -39,6 +40,7 @@ class FakeLlamaCloudServer:
         self.base_urls = tuple(base_urls or (self.DEFAULT_BASE_URL,))
         selected = namespaces or (
             "files",
+            "configurations",
             "extract",
             "parse",
             "classify",
@@ -62,7 +64,12 @@ class FakeLlamaCloudServer:
             upload_base_url=self._upload_base_url,
             download_base_url=self._download_base_url,
         )
-        self.extract = FakeExtractNamespace(server=self, files=self.files)
+        self.configurations = FakeConfigurationsNamespace(server=self)
+        self.extract = FakeExtractNamespace(
+            server=self,
+            files=self.files,
+            configurations=self.configurations,
+        )
         self.parse = FakeParseNamespace(server=self)
         self.classify = FakeClassifyNamespace(server=self, files=self.files)
         self.agent_data = FakeAgentDataNamespace(server=self)
@@ -181,6 +188,8 @@ class FakeLlamaCloudServer:
     def _register_namespaces(self) -> None:
         if "files" in self._namespace_names:
             self.files.register()
+        if "configurations" in self._namespace_names:
+            self.configurations.register()
         if "extract" in self._namespace_names:
             self.extract.register()
         if "parse" in self._namespace_names:

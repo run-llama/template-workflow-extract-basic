@@ -1,6 +1,6 @@
 {
   "extract": {
-    "extraction_agent_id": null,
+    "configuration_id": null,
     "json_schema": {
       "type": "object",
       "properties": {
@@ -21,10 +21,9 @@
       "required": ["document_type", "summary", "key_points"]
     },
     "settings": {
-      "extraction_mode": "PREMIUM",
+      "tier": "agentic",
+      "extraction_target": "per_doc",
       "system_prompt": null,
-      "citation_bbox": true,
-      "use_reasoning": false,
       "cite_sources": true,
       "confidence_scores": true
     }

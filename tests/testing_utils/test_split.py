@@ -20,10 +20,12 @@ async def test_split_end_to_end(
 ) -> None:
     file_id = server.files.preload(path="tests/files/test.pdf")
     split_job = await client.beta.split.create(
-        categories=[
-            {"name": "hello", "description": ""},
-            {"name": "world", "description": ""},
-        ],
+        configuration={
+            "categories": [
+                {"name": "hello", "description": ""},
+                {"name": "world", "description": ""},
+            ],
+        },
         document_input={"type": "file_id", "value": file_id},
     )
     assert split_job.id.startswith("split-")
@@ -49,10 +51,9 @@ async def test_split_no_categories_raises_bad_request(
     server: FakeLlamaCloudServer, client: AsyncLlamaCloud
 ) -> None:
     file_id = server.files.preload(path="tests/files/test.pdf")
-    # should fail because there are no categories
     with pytest.raises(APIStatusError) as exc_info:
         await client.beta.split.create(
-            categories=[],
+            configuration={"categories": []},
             document_input={"type": "file_id", "value": file_id},
         )
         assert exc_info.value.status_code == 400
@@ -67,13 +68,14 @@ async def test_split_invalid_document_input_type_raises_bad_request(
     server: FakeLlamaCloudServer, client: AsyncLlamaCloud
 ) -> None:
     file_id = server.files.preload(path="tests/files/test.pdf")
-    # should fail because the only allowed document_input type is file_id
     with pytest.raises(APIStatusError) as exc_info:
         await client.beta.split.create(
-            categories=[
-                {"name": "hello", "description": ""},
-                {"name": "world", "description": ""},
-            ],
+            configuration={
+                "categories": [
+                    {"name": "hello", "description": ""},
+                    {"name": "world", "description": ""},
+                ],
+            },
             document_input={"type": "file", "value": file_id},
         )
         assert exc_info.value.status_code == 400
@@ -90,10 +92,12 @@ async def test_split_non_existing_file_id_raises_notfound(
     file_id = "file-doesnotexist"
     with pytest.raises(APIStatusError) as exc_info:
         await client.beta.split.create(
-            categories=[
-                {"name": "hello", "description": ""},
-                {"name": "world", "description": ""},
-            ],
+            configuration={
+                "categories": [
+                    {"name": "hello", "description": ""},
+                    {"name": "world", "description": ""},
+                ],
+            },
             document_input={"type": "file_id", "value": file_id},
         )
         assert exc_info.value.status_code == 404

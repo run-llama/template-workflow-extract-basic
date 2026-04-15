@@ -5,6 +5,7 @@ from typing import Annotated, Any, Literal
 
 from llama_cloud import AsyncLlamaCloud
 from llama_cloud.types.beta.extracted_data import ExtractedData, InvalidExtractionData
+from llama_cloud.types.configuration_response import ExtractV2Parameters
 from pydantic import BaseModel
 from workflows import Context, Workflow, step
 from workflows.events import Event, StartEvent, StopEvent
@@ -47,6 +48,15 @@ class ExtractionState(BaseModel):
     extract_job_id: str | None = None
 
 
+def _build_inline_configuration(extract_config: ExtractConfig) -> dict[str, Any]:
+    """Build an inline v2 ExtractConfiguration param from local config."""
+    settings = extract_config.settings.model_dump(exclude_none=True)
+    return {
+        "data_schema": extract_config.json_schema,
+        **settings,
+    }
+
+
 class ProcessFileWorkflow(Workflow):
     """Extract structured data from a document and save it for review."""
 
@@ -72,10 +82,14 @@ class ProcessFileWorkflow(Workflow):
         file_id = event.file_id
         logger.info(f"Running file {file_id}")
 
-        # Get file metadata
+        # Get file metadata (v2: files.list returns AsyncPaginator)
         try:
-            files_page = await llama_cloud_client.files.list(file_ids=[file_id])
-            file_metadata = files_page.items[0]
+            file_metadata = None
+            async for f in llama_cloud_client.files.list(file_ids=[file_id]):
+                file_metadata = f
+                break
+            if file_metadata is None:
+                raise ValueError(f"File {file_id} not found")
             filename = file_metadata.name
         except Exception as e:
             logger.error(f"Error fetching file metadata {file_id}: {e}", exc_info=True)
@@ -87,22 +101,22 @@ class ProcessFileWorkflow(Workflow):
             )
             raise e
 
-        # Start extraction job
+        # Start extraction job (v2: client.extract.create / run)
         logger.info(f"Extracting data from file {filename}")
         ctx.write_event_to_stream(
             Status(level="info", message=f"Extracting data from file {filename}")
         )
 
-        if extract_config.extraction_agent_id:
-            extract_job = await llama_cloud_client.extraction.jobs.extract(
-                extraction_agent_id=extract_config.extraction_agent_id,
-                file_id=file_id,
+        if extract_config.configuration_id:
+            extract_job = await llama_cloud_client.extract.create(
+                file_input=file_id,
+                configuration_id=extract_config.configuration_id,
+                project_id=project_id,
             )
         else:
-            extract_job = await llama_cloud_client.extraction.run(
-                config=extract_config.settings.model_dump(),
-                data_schema=extract_config.json_schema,
-                file_id=file_id,
+            extract_job = await llama_cloud_client.extract.create(
+                file_input=file_id,
+                configuration=_build_inline_configuration(extract_config),
                 project_id=project_id,
             )
 
@@ -110,7 +124,6 @@ class ProcessFileWorkflow(Workflow):
         # or fall back to external_file_id from file metadata for deduplication
         file_hash = event.file_hash or file_metadata.external_file_id
 
-        # Save state (mutation at end of step)
         async with ctx.store.edit_state() as state:
             state.file_id = file_id
             state.filename = filename
@@ -142,36 +155,41 @@ class ProcessFileWorkflow(Workflow):
         if state.extract_job_id is None:
             raise ValueError("Job ID cannot be null when waiting for its completion")
 
-        # Wait for extraction job to complete
-        await llama_cloud_client.extraction.jobs.wait_for_completion(
-            state.extract_job_id
+        # Wait for extraction job to complete; v2 returns the completed job
+        # (with extract_result embedded) directly.
+        job = await llama_cloud_client.extract.wait_for_completion(
+            state.extract_job_id,
+            project_id=project_id,
+        )
+        # Re-fetch with extract_metadata expansion for field-level metadata
+        job = await llama_cloud_client.extract.get(
+            state.extract_job_id,
+            expand=["extract_metadata"],
+            project_id=project_id,
         )
 
-        # Get extraction result
-        extracted_result = await llama_cloud_client.extraction.jobs.get_result(
-            state.extract_job_id
-        )
-        extract_run = await llama_cloud_client.extraction.runs.get(
-            run_id=extracted_result.run_id
-        )
-
-        # Validate and parse extraction result
         extracted_event: ExtractedEvent | ExtractedInvalidEvent
         try:
             logger.info(
-                f"Extracted data: {json.dumps(extracted_result.model_dump(), indent=2)}"
+                f"Extracted data: {json.dumps(job.model_dump(mode='json'), indent=2, default=str)}"
             )
-            # Create dynamic Pydantic model from JSON schema
-            if extract_config.extraction_agent_id:
-                agent = await llama_cloud_client.extraction.extraction_agents.get(
-                    extract_config.extraction_agent_id
+            # Resolve the schema that governs the extracted data.
+            if extract_config.configuration_id:
+                config_resp = await llama_cloud_client.configurations.retrieve(
+                    extract_config.configuration_id,
+                    project_id=project_id,
                 )
-                schema_class = get_extraction_schema(agent.data_schema)
+                params = config_resp.parameters
+                if not isinstance(params, ExtractV2Parameters):
+                    raise ValueError(
+                        f"Configuration {extract_config.configuration_id} is not extract_v2"
+                    )
+                schema_class = get_extraction_schema(dict(params.data_schema))
             else:
                 schema_class = get_extraction_schema(extract_config.json_schema)
-            # Use from_extraction_result for proper metadata extraction
-            data = ExtractedData.from_extraction_result(
-                result=extract_run,
+
+            data = ExtractedData.from_extract_job(
+                job=job,
                 schema=schema_class,
                 file_name=state.filename,
                 file_id=state.file_id,
@@ -193,13 +211,10 @@ class ProcessFileWorkflow(Workflow):
             )
             raise e
 
-        # Stream the extracted event to client
         ctx.write_event_to_stream(extracted_event)
 
-        # Save extracted data for review
         extracted_data = extracted_event.data
         data_dict = extracted_data.model_dump()
-        # Remove past data when reprocessing the same file
         if extracted_data.file_hash is not None:
             delete_result = await llama_cloud_client.beta.agent_data.delete_by_query(
                 deployment_name=agent_name or "_public",
@@ -215,7 +230,6 @@ class ProcessFileWorkflow(Workflow):
                     f"Removed {delete_result.deleted_count} existing record(s) "
                     f"for file {extracted_data.file_name}"
                 )
-        # finally, save the new data
         item = await llama_cloud_client.beta.agent_data.agent_data(
             data=data_dict,
             deployment_name=agent_name or "_public",

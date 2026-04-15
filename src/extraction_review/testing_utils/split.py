@@ -52,7 +52,8 @@ class FakeSplitNamespace:
         if input_value is None:
             response = {"detail": "Missing document_input.value field"}
             return self._server.json_response(response, status_code=400)
-        categories = payload.get("categories", [])
+        configuration = payload.get("configuration") or {}
+        categories = configuration.get("categories", [])
         if not categories:
             response = {"detail": "categories field should be non-null and non-empty"}
             return self._server.json_response(response, status_code=400)
