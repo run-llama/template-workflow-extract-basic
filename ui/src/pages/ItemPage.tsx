@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState } from "react";
 import {
   AcceptReject,
   ExtractedDataDisplay,
@@ -18,41 +18,6 @@ import { downloadExtractedDataItem } from "@/lib/export";
 import { useMetadataContext } from "@/lib/MetadataProvider";
 import { convertBoundingBoxesToHighlights } from "@/lib/utils";
 
-/**
- * Select the appropriate schema based on the discriminator field value.
- * If multiple schemas are provided and the item has a discriminator value,
- * use the type-specific schema for a focused editing experience.
- * Otherwise, fall back to the union schema.
- */
-function selectSchemaForItem(
-  metadata: {
-    json_schema: any;
-    schemas?: Record<string, any>;
-    discriminator_field?: string;
-  },
-  itemData: any,
-): any {
-  const { schemas, discriminator_field, json_schema } = metadata;
-
-  // If no discriminator support, use the union schema
-  if (!schemas || !discriminator_field) {
-    return json_schema;
-  }
-
-  // Get the discriminator value from the extracted data
-  // item.data contains wrapper fields (status, file_id, etc.)
-  // item.data.data contains the actual extracted fields including the discriminator
-  const discriminatorValue = itemData?.data?.data?.[discriminator_field];
-
-  // If we have a valid discriminator value and a matching schema, use it
-  if (discriminatorValue && schemas[discriminatorValue]) {
-    return schemas[discriminatorValue];
-  }
-
-  // Fall back to the union schema
-  return json_schema;
-}
-
 export default function ItemPage() {
   const { itemId } = useParams<{ itemId: string }>();
   const { setButtons, setBreadcrumbs } = useToolbar();
@@ -63,16 +28,6 @@ export default function ItemPage() {
     itemId: itemId as string,
     isMock: false,
   });
-
-  // Select the appropriate schema based on discriminator field
-  const selectedSchema = useMemo(() => {
-    return selectSchemaForItem(metadata, itemHookData.item);
-  }, [metadata, itemHookData.item]);
-
-  // Modify the selected schema for display
-  const displaySchema = useMemo(() => {
-    return modifyJsonSchema(selectedSchema, {});
-  }, [selectedSchema]);
 
   const navigate = useNavigate();
 
@@ -153,7 +108,6 @@ export default function ItemPage() {
     );
   }
 
-  // Cast itemData.data to ExtractedData for proper typing
   const extractedData = itemData.data as ExtractedData<any>;
   const fileId = extractedData.file_id;
 
@@ -185,7 +139,7 @@ export default function ItemPage() {
               );
               setHighlight(highlights[0]);
             }}
-            jsonSchema={displaySchema}
+            jsonSchema={itemHookData.jsonSchema}
           />
         </div>
       </div>

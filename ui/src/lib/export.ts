@@ -18,9 +18,6 @@ export function downloadJSON<T>(
   URL.revokeObjectURL(url);
 }
 
-/**
- * Downloads extracted data item as JSON
- */
 export function downloadExtractedDataItem(item: AgentDataItem) {
   const extractedData = item.data as ExtractedData<unknown>;
   const fileName = extractedData.file_name || "item";

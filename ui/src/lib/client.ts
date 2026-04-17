@@ -17,8 +17,6 @@ const projectId = import.meta.env.VITE_LLAMA_DEPLOY_PROJECT_ID;
 configureCloudClient({
   ...(apiBaseUrl && { baseURL: apiBaseUrl }),
   ...(platformToken && { apiKey: platformToken }),
-  // Project ID header is required for requests to correctly scope to the agent's project
-  // when authenticating with a user cookie
   ...(projectId && { projectId }),
 });
 
