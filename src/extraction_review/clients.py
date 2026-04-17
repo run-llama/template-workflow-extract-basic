@@ -3,8 +3,6 @@ import os
 
 from llama_cloud import AsyncLlamaCloud
 
-from .testing_utils import FakeLlamaCloudServer
-
 logger = logging.getLogger(__name__)
 
 # deployed agents may infer their name from the deployment name
@@ -16,7 +14,9 @@ base_url = os.getenv("LLAMA_CLOUD_BASE_URL")
 project_id = os.getenv("LLAMA_DEPLOY_PROJECT_ID")
 
 if os.getenv("FAKE_LLAMA_CLOUD"):
-    fake: FakeLlamaCloudServer | None = FakeLlamaCloudServer().install()
+    from llama_cloud_fake import FakeLlamaCloudServer
+
+    fake = FakeLlamaCloudServer().install()
 else:
     fake = None
 

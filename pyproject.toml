@@ -28,7 +28,14 @@ dev = [
     "psutil>=7.1.3",
     "pytest-playwright>=0.7.2",
     "pytest-timeout>=2.3.1",
+    "llama-cloud-fake>=0.1,<0.2",
 ]
+
+# Until llama-cloud-fake is published to PyPI, resolve from the monorepo
+# workspace. Remove this block once the package is on PyPI and the above
+# version pin can resolve normally.
+[tool.uv.sources]
+llama-cloud-fake = { path = "../../packages/llama-cloud-fake", editable = true }
 
 [build-system]
 requires = ["hatchling"]

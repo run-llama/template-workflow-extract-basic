@@ -3,4 +3,3 @@ _exclude:
   - ".github"
   - "copier.yaml"
   - ".venv"
-  - "tests/testing_utils"
